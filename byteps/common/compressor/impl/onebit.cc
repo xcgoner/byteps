@@ -13,10 +13,10 @@
 // limitations under the License.
 // =============================================================================
 
-#include <bitset>
+#include <cstring>
 
-#include "../compressor_registry.h"
 #include "onebit.h"
+#include "../compressor_registry.h"
 
 namespace byteps {
 namespace common {
@@ -25,12 +25,8 @@ namespace {
 CompressorRegistry::Register reg("onebit_compressor", [](const kwargs_t& kwargs,
                                                          size_t size,
                                                          DataType dtype) {
-  BPS_LOG(DEBUG) << "Register Onebit Compressor";
-  bool scaled = false;
-  auto iter = kwargs.find("compressor_onebit_scaling");
-  if (iter != kwargs.end()) {
-    if (iter->second == "true" || iter->second == "True") scaled = true;
-  }
+  auto scaled =
+      HyperParamFinder<bool>(kwargs, "compressor_onebit_scaling", true);
   return std::unique_ptr<Compressor>(new OnebitCompressor(size, dtype, scaled));
 });
 }
@@ -47,17 +43,16 @@ tensor_t OnebitCompressor::CompressImpl(index_t* dst, const scalar_t* src,
   float scale = 1.0f;
   if (_use_scale) {
     double sum = 0.0f;
-#pragma omp parallel for simd num_threads(4) reduction(+ : sum)
-    for (int i = 0; i < len; ++i) {
+    for (size_t i = 0; i < len; ++i) {
       sum += std::abs(src[i]);
     }
     scale = sum / len;
   }
 
-#pragma omp parallel for simd num_threads(4)
-  for (int i = 0; i < chunk_len; ++i) {
+#pragma omp parallel for simd
+  for (size_t i = 0; i < chunk_len; ++i) {
     index_t x = src[i * PACKING_SIZE] < 0;
-    for (int j = 1; j < PACKING_SIZE; ++j) {
+    for (size_t j = 1; j < PACKING_SIZE; ++j) {
       x <<= 1;
       x |= src[i * PACKING_SIZE + j] < 0;
     }
@@ -92,7 +87,7 @@ tensor_t OnebitCompressor::DecompressImpl(scalar_t* dst, const index_t* src,
     std::memcpy(ptr, src, compressed_size);
   }
 
-#pragma omp parallel for simd num_threads(4)
+#pragma omp parallel for simd
   for (int i = chunk_len - 1; i >= 0; --i) {
     index_t x = ptr[i];
     for (int j = PACKING_SIZE - 1; j >= 0; --j) {
@@ -125,7 +120,7 @@ void OnebitCompressor::FastUpdateErrorImpl(scalar_t* error, scalar_t* corrected,
   auto* pf = reinterpret_cast<const float*>(compressed + chunk_len);
   float scale = *pf;
 
-#pragma omp parallel for simd num_threads(4)
+#pragma omp parallel for simd
   for (int i = chunk_len - 1; i >= 0; --i) {
     index_t x = compressed[i];
     for (int j = PACKING_SIZE - 1; j >= 0; --j) {
@@ -139,9 +134,9 @@ void OnebitCompressor::FastUpdateErrorImpl(scalar_t* error, scalar_t* corrected,
 
 void OnebitCompressor::FastUpdateError(tensor_t error, tensor_t corrected,
                                        tensor_t compressed) {
-  SWITCH_TO_FAST_UPDATE_ERROR_IMPL_SWITCH(_dtype, FastUpdateErrorImpl,
-                                          error.data, corrected.data,
-                                          compressed.data, compressed.size);
+  FAST_UPDATE_ERROR_IMPL_SWITCH(_dtype, FastUpdateErrorImpl, error.data,
+                                corrected.data, compressed.data,
+                                compressed.size);
 }
 }  // namespace compressor
 }  // namespace common

@@ -45,10 +45,14 @@ class CpuReducer {
     BPS_LOG(DEBUG) << "Clear CpuReducer";
   }
 
-  int sum(void* dst, const void* src, size_t len, DataType dtype,
-          float alpha = 1.0);
+  int sum(void* dst, const void* src, size_t len, DataType dtype);
   int sum(void* dst, const void* src1, const void* src2, size_t len,
-          DataType dtype, float alpha = 1.0);
+          DataType dtype);
+
+  int sum(void* dst, const void* src, size_t len, DataType dtype, float alpha);
+  int sum(void* dst, const void* src1, const void* src2, size_t len,
+          DataType dtype, float alpha);
+
   int copy(void* dst, const void* src, size_t len);
 
 #ifndef BYTEPS_BUILDING_SERVER
@@ -59,6 +63,14 @@ class CpuReducer {
   DataType GetDataType(int dtype) { return static_cast<DataType>(dtype); }
 
  private:
+  size_t GetRecommendNumThreads(size_t len) const {
+    if (len < _single_thread_threshold) {
+      return 1;
+    } else {
+      return _num_threads;
+    }
+  }
+
 #if __AVX__ && __F16C__
   // Query CPUID to determine AVX and F16C runtime support.
   bool is_avx_and_f16c() {
@@ -174,6 +186,14 @@ class CpuReducer {
   }
 
   template <typename T>
+  int _sum(T* dst, const T* src, size_t len);
+  template <typename T>
+  int _sum(T* dst, const T* src1, const T* src2, size_t len);
+
+  int _sum_float16(void* dst, const void* src, size_t len);
+  int _sum_float16(void* dst, const void* src1, const void* src2, size_t len);
+
+  template <typename T>
   int _sum(T* dst, const T* src, size_t len, float alpha);
 
   template <typename T>
@@ -188,6 +208,7 @@ class CpuReducer {
 
   std::shared_ptr<BytePSComm> _comm;
   int _num_threads;
+  size_t _single_thread_threshold; 
 };
 
 }  // namespace common

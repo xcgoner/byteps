@@ -212,18 +212,15 @@ class DistributedTrainer(mx.gluon.Trainer):
         if local_rank() == 0:
             self._f = open("lr.s", "wb")
             self._f.truncate(8)
-        # _scale is used to check and set rescale_grad for optimizer in Trainer.step()
-        # function. Normalizing it by BytePS size, which is equivalent to performing
-        # average in push_pull, has better performance.
-        # self._scale /= size()
+
         self._bps_size = size()
         self.root_rank = root_rank
         self._intra_compressors = {}
         for i, param in enumerate(self._params):
             byteps_declare_tensor("parameter_" + str(i))
+            self._intra_compressors[param.name] = type(self._intra_compressor)(
+                **self._intra_compressor.__dict__)
             if param.grad_req != 'null':
-                self._intra_compressors[i] = type(self._intra_compressor)(
-                    **self._intra_compressor.__dict__)
                 byteps_params = dict(
                     filter(lambda attr: attr[0].startswith(
                         "byteps_",), param.__dict__.items())
@@ -241,7 +238,7 @@ class DistributedTrainer(mx.gluon.Trainer):
         if not compression_params:
             return intra_compressor
 
-        if "fp16" in compression_params:
+        if compression_params.get("fp16"):
             intra_compressor = Compression.fp16
 
         if "compressor" not in compression_params:
@@ -278,7 +275,8 @@ class DistributedTrainer(mx.gluon.Trainer):
                 setattr(param, "byteps_seed",
                         compression_params["seed"])
 
-        # change
+        # the following code will delete some items in `optimizer_params`
+        # to avoid duplication
         if compression_params.get("momentum"):
             # 1bit compressor use an additional momentum for weight decay
             if compressor == "onebit" and "wd" in optimizer_params:
@@ -291,6 +289,8 @@ class DistributedTrainer(mx.gluon.Trainer):
         return intra_compressor
 
     def step(self, batch_size, ignore_stale_grad=False):
+        # grad is normalized with batch_size. setting _scale to batch_size is
+        # to prevent normalized by batch_size twice.
         self._scale = batch_size
         super(DistributedTrainer, self).step(batch_size, ignore_stale_grad)
 
@@ -304,14 +304,14 @@ class DistributedTrainer(mx.gluon.Trainer):
 
         for i, param in enumerate(self._params):
             if param.grad_req != 'null':
-                # grad /= (batch_size * num_workers)
+                # normalized with batch_size and num_workers
                 nd._internal._mul_scalar(
                     param._grad[0], 1.0 / self._scale / self._bps_size, out=param._grad[0])
-                compressed, ctx = self._intra_compressors[i].compress(
+                compressed, ctx = self._intra_compressors[param.name].compress(
                     param._grad[0])
                 byteps_push_pull(compressed, is_average=False,
                                  name="gradient_" + str(i), priority=-i)
-                param._grad[0] = self._intra_compressors[i].decompress(
+                param._grad[0][:] = self._intra_compressors[param.name].decompress(
                     compressed, ctx,  x=param._data[0])
 
     def _init_params(self):
@@ -325,7 +325,12 @@ class DistributedTrainer(mx.gluon.Trainer):
 
                 if rank() != self.root_rank:
                     param_arrays[0].__imul__(0)
-                byteps_push_pull(param_arrays[0], version=0, priority=0,
+
+                compressed, ctx = self._intra_compressors[param.name].compress(
+                    param_arrays[0])
+                byteps_push_pull(compressed, version=0, priority=0,
                                  name="parameter_" + str(idx), is_average=False)
+                param_arrays[0][:] = self._intra_compressors[param.name].decompress(
+                    compressed, ctx,  x=param._data[0])
 
         self._params_to_init = tensors

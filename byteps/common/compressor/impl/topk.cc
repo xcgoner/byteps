@@ -13,6 +13,7 @@
 // limitations under the License.
 // =============================================================================
 
+#include <cstring>
 #include <queue>
 
 #include "../compressor_registry.h"
@@ -26,13 +27,7 @@ CompressorRegistry::Register reg(
     "topk_compressor",
     [](const kwargs_t& kwargs, size_t size,
        DataType dtype) -> std::unique_ptr<Compressor> {
-      auto iter = kwargs.find("compressor_k");
-      if (iter == kwargs.end()) {
-        BPS_LOG(FATAL) << "Topk Compressor needs parameter \"compressor_k\"";
-      }
-      int k = std::stoi(iter->second);
-      BPS_LOG(DEBUG) << "Register Topk Compressor "
-                     << "k=" << k;
+      auto k = HyperParamFinder<unsigned>(kwargs, "compressor_k");
       return std::unique_ptr<Compressor>(new TopkCompressor(size, dtype, k));
     });
 }
@@ -44,14 +39,13 @@ tensor_t TopkCompressor::CompressImpl(index_t* dst, const scalar_t* src,
                 "index_t should be the same size as scalar_t");
   BPS_CHECK_LE(this->_k, len / 2);
   using pair_t = std::pair<index_t, scalar_t>;
-  using container_t = std::vector<pair_t>;
   auto comp = [](const pair_t& lhs, const pair_t& rhs) {
     return lhs.second > rhs.second;
   };
 
   auto beg = reinterpret_cast<pair_t*>(dst);
   size_t size = 0;
-  for (index_t i = 0; i < len; ++i) {
+  for (size_t i = 0; i < len; ++i) {
     if (i < this->_k) {
       beg[size] = std::make_pair(i, src[i]);
       size++;
@@ -92,7 +86,7 @@ tensor_t TopkCompressor::DecompressImpl(scalar_t* dst, const index_t* src,
   // reset to zeros
   std::memset(dst, 0, _size);
   size_t len = compressed_size / sizeof(pair_t);
-  for (auto i = 0; i < len; ++i) {
+  for (size_t i = 0; i < len; ++i) {
     auto& pair = ptr[i];
     dst[pair.first] = pair.second;
   }
@@ -121,7 +115,7 @@ void TopkCompressor::FastUpdateErrorImpl(scalar_t* error, scalar_t* corrected,
   std::memcpy(error, corrected, _size);
 
   auto ptr = reinterpret_cast<const pair_t*>(compressed);
-  for (auto i = 0; i < this->_k; ++i) {
+  for (size_t i = 0; i < this->_k; ++i) {
     auto& pair = ptr[i];
     error[pair.first] = 0;
   }
@@ -129,9 +123,9 @@ void TopkCompressor::FastUpdateErrorImpl(scalar_t* error, scalar_t* corrected,
 
 void TopkCompressor::FastUpdateError(tensor_t error, tensor_t corrected,
                                      tensor_t compressed) {
-  SWITCH_TO_FAST_UPDATE_ERROR_IMPL_SWITCH(_dtype, FastUpdateErrorImpl,
-                                          error.data, corrected.data,
-                                          compressed.data, compressed.size);
+  FAST_UPDATE_ERROR_IMPL_SWITCH(_dtype, FastUpdateErrorImpl, error.data,
+                                corrected.data, compressed.data,
+                                compressed.size);
 }
 }  // namespace compressor
 }  // namespace common

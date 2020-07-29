@@ -18,7 +18,8 @@
 
 #include <memory>
 
-#include "../cpu_reducer.h"
+#include "../common.h"
+#include "../logging.h"
 #include "common.h"
 
 namespace byteps {
@@ -52,10 +53,7 @@ namespace compressor {
 class Compressor {
  public:
   Compressor(size_t size, DataType dtype)
-      : _size(size),
-        _dtype(dtype),
-        _buf(new byte_t[size]),
-        _cpu_reducer(new CpuReducer(nullptr)){};
+      : _size(size), _dtype(dtype), _buf(new byte_t[size]){};
   virtual ~Compressor() = default;
 
   /*!
@@ -118,16 +116,14 @@ class Compressor {
     BPS_LOG(FATAL) << "FastUpdateError is not implemented";
   };
 
-  /*! \brief buffer to store compressed grad */
-  std::unique_ptr<byte_t[]> _buf;
-
+ protected:
   /*! \brief original size */
   size_t _size;
 
   DataType _dtype;
 
-  /*! \brief CPU reducer */
-  std::unique_ptr<CpuReducer> _cpu_reducer;
+  /*! \brief buffer to store compressed grad */
+  std::unique_ptr<byte_t[]> _buf;
 };
 
 }  // namespace compressor
