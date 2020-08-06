@@ -83,6 +83,7 @@ void DoPushPull(void*, void* on_complete_ptr, void* param) {
   auto byteps_input = std::make_shared<MXTensor<NDArray>>(input);
   auto queue_list = common::GetPushQueueList(device);
   auto queue_list_pull = common::GetPullQueueList(device);
+  // concatenate pull operations after push operations
   queue_list->insert(queue_list->end(), queue_list_pull->begin(),
                      queue_list_pull->end());
 
