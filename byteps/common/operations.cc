@@ -274,6 +274,8 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
   // MXNet server has a bug dealing with keys larger than 2^32
   // Below we support up to 2^16 tensors, and up to 2^16 partitions per tensor
   ps::Key start_key = context.declared_key << 16;
+  // // debug
+  // std::cout << name << ": declared_key=" << context.declared_key << ", start_key=" << start_key << std::endl;
   while (accumulated < size) {
     context.key_list.push_back(start_key++);
     accumulated +=

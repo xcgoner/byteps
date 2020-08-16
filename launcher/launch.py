@@ -35,7 +35,8 @@ class PropagatingThread(threading.Thread):
 
 COMMON_REQUIRED_ENVS = ["DMLC_ROLE", "DMLC_NUM_WORKER", "DMLC_NUM_SERVER",
                         "DMLC_PS_ROOT_URI", "DMLC_PS_ROOT_PORT"]
-WORKER_REQUIRED_ENVS = ["DMLC_WORKER_ID"]
+WORKER_REQUIRED_ENVS = ["DMLC_WORKER_ID", "DMLC_WORKER_TYPE"]
+VALIDATOR_REQUIRED_ENVS = ["DMLC_VALIDATOR_ID", "DMLC_WORKER_TYPE"]
 
 
 def check_env():
@@ -43,12 +44,21 @@ def check_env():
            os.environ["DMLC_ROLE"].lower() in ["worker", "server", "scheduler"]
     required_envs = COMMON_REQUIRED_ENVS
     if os.environ["DMLC_ROLE"] == "worker":
-        assert "DMLC_NUM_WORKER" in os.environ
-        num_worker = int(os.environ["DMLC_NUM_WORKER"])
-        assert num_worker >= 1
-        if num_worker == 1:
-            required_envs = []
-        required_envs += WORKER_REQUIRED_ENVS
+        assert "DMLC_WORKER_TYPE" in os.environ
+        if os.environ["DMLC_WORKER_TYPE"] == "worker":
+            assert "DMLC_NUM_WORKER" in os.environ
+            num_worker = int(os.environ["DMLC_NUM_WORKER"])
+            assert num_worker >= 1
+            if num_worker == 1:
+                required_envs = []
+            required_envs += WORKER_REQUIRED_ENVS
+        elif os.environ["DMLC_WORKER_TYPE"] == "validator":
+            assert "DMLC_NUM_VALIDATOR" in os.environ
+            num_validator = int(os.environ["DMLC_NUM_VALIDATOR"])
+            assert num_validator >= 1
+            if num_validator == 1:
+                required_envs = []
+            required_envs += VALIDATOR_REQUIRED_ENVS
     for env in required_envs:
         if env not in os.environ:
             print("The env " + env + " is missing")
@@ -78,9 +88,11 @@ def worker(local_rank, local_size, command):
     subprocess.check_call(command, env=my_env,
                           stdout=sys.stdout, stderr=sys.stderr, shell=True)
 
-
 def launch_bps():
-    print("BytePS launching " + os.environ["DMLC_ROLE"])
+    if os.environ["DMLC_ROLE"] == "worker":
+        print("BytePS launching " + os.environ["DMLC_WORKER_TYPE"])
+    else:
+        print("BytePS launching " + os.environ["DMLC_ROLE"])
     sys.stdout.flush()
     check_env()
     if os.environ["DMLC_ROLE"] == "worker":

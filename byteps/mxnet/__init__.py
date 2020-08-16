@@ -22,7 +22,7 @@ import warnings
 import mxnet as mx
 import os
 
-from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor
+from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor, byteps_push, byteps_pull
 from byteps.mxnet.ops import init, shutdown, suspend, resume
 from byteps.mxnet.ops import size, local_size, rank, local_rank
 
@@ -209,8 +209,10 @@ class DistributedTrainer(mx.gluon.Trainer):
     def _allreduce_grads(self):
         for i, param in enumerate(self._params):
             if param.grad_req != 'null':
-                byteps_push_pull(param.list_grad()[0], is_average=False,
-                                 name="gradient_" + str(i), priority=-i)
+                # byteps_push_pull(param.list_grad()[0], is_average=False,
+                #                  name="gradient_" + str(i), priority=-i)
+                byteps_push(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
+                byteps_pull(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
 
     def _init_params(self):
         tensors = []
@@ -223,7 +225,9 @@ class DistributedTrainer(mx.gluon.Trainer):
 
                 if rank() != self.root_rank:
                     param_arrays[0].__imul__(0)
-                byteps_push_pull(param_arrays[0], version=0, priority=0,
-                                 name="parameter_" + str(idx), is_average=False)
+                # byteps_push_pull(param_arrays[0], version=0, priority=0,
+                #                  name="parameter_" + str(idx), is_average=False)
+                byteps_push(param_arrays[0], version=0, priority=0, name="parameter_" + str(idx))
+                byteps_pull(param_arrays[0], version=0, priority=0, name="parameter_" + str(idx))
 
         self._params_to_init = tensors

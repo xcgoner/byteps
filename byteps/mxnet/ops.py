@@ -77,6 +77,68 @@ def byteps_push_pull(tensor, version=0, priority=0, name=None, is_average=True):
 
     return
 
+def byteps_push(tensor, version=0, priority=0, name=None):
+    """
+    A function that performs pushing and pulling tensors
+
+    The operation is keyed by the name. If name is not provided, an
+    incremented auto-generated name is used. The tensor type and shape must be
+    the same on all BytePS processes for a given name. The reduction will not
+    start until all processes are ready to send and receive the tensor.
+
+    This acts as a thin wrapper around an autograd function.  If your input
+    tensor requires tensors, then callings this function will allow tensors
+    to be computed and backpropagated.
+
+    Arguments:
+        tensor: A tensor to average and sum.
+        name: A name of the reduction operation.
+
+    Returns:
+        None
+    """
+
+    c_in = tensor.handle
+    if isinstance(name, string_types):
+        check_call(MXNET_LIB_CTYPES.byteps_mxnet_push_async(c_in,
+                                                                 c_str(name), ctypes.c_int(version), ctypes.c_int(priority)))
+    else:
+        check_call(MXNET_LIB_CTYPES.byteps_mxnet_push_async(c_in,
+                                                                 name, ctypes.c_int(version), ctypes.c_int(priority)))
+
+    return
+
+def byteps_pull(tensor, version=0, priority=0, name=None):
+    """
+    A function that performs pushing and pulling tensors
+
+    The operation is keyed by the name. If name is not provided, an
+    incremented auto-generated name is used. The tensor type and shape must be
+    the same on all BytePS processes for a given name. The reduction will not
+    start until all processes are ready to send and receive the tensor.
+
+    This acts as a thin wrapper around an autograd function.  If your input
+    tensor requires tensors, then callings this function will allow tensors
+    to be computed and backpropagated.
+
+    Arguments:
+        tensor: A tensor to average and sum.
+        name: A name of the reduction operation.
+
+    Returns:
+        None
+    """
+
+    c_in = tensor.handle
+    if isinstance(name, string_types):
+        check_call(MXNET_LIB_CTYPES.byteps_mxnet_pull_async(c_in,
+                                                                 c_str(name), ctypes.c_int(version), ctypes.c_int(priority)))
+    else:
+        check_call(MXNET_LIB_CTYPES.byteps_mxnet_pull_async(c_in,
+                                                                 name, ctypes.c_int(version), ctypes.c_int(priority)))
+
+    return
+
 
 def byteps_declare_tensor(name):
     check_call(MXNET_LIB_CTYPES.byteps_mxnet_declare_tensor(c_str(name)))

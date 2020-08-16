@@ -23,6 +23,8 @@
 #include <unistd.h>
 #include "ps/ps.h"
 #include "../common/cpu_reducer.h"
+#include <bits/stdc++.h>
+#include <queue>
 
 namespace byteps {
 namespace server {
@@ -39,7 +41,7 @@ enum class RequestType {
 };
 
 enum BytePSEngineOperation {
-  SUM_RECV, COPY_MERGED, TERMINATE
+  SUM_RECV, COPY_MERGED, TERMINATE, COPY_MERGED_VALIDATED
 };
 
 struct PSKV {
@@ -103,6 +105,8 @@ std::vector<std::unordered_map<uint64_t, bool> > is_push_finished_;
 std::vector<std::unordered_map<uint64_t, std::vector<ps::KVMeta> > > q_pull_reqmeta_;
 std::vector<std::unordered_map<uint64_t, std::set<int> > > seen_sender_;
 std::vector<std::unordered_map<uint64_t, size_t> > pull_cnt_;
+// whether a key is shared (pulled) by both workers and validators, which can only be pushed by validators
+std::unordered_map<uint64_t, bool> is_global_shared_;
 
 // byteps handler
 std::mutex handle_mu_;
@@ -111,6 +115,20 @@ std::unordered_map<uint64_t, UpdateBuf> update_buf_;
 // address map
 std::mutex store_mu_;
 std::unordered_map<uint64_t, BytePSArray> store_;
+
+// A hash function used to hash a pair of any kind 
+struct pair_hash {
+	template <class T1, class T2>
+	size_t operator() (const std::pair<T1, T2> &p) const{
+		return std::hash<T1>()(p.first) ^ std::hash<T2>()(p.second);
+	}
+};
+// worker-to-validator cache
+std::mutex worker_cache_mu_;
+std::unordered_map<std::pair<uint64_t, uint64_t>, BytePSArray, pair_hash> worker_cache_; 
+std::unordered_map<uint64_t, std::queue<ps::KVMeta > > validator_pull_queue_;
+std::unordered_map<uint64_t, std::queue<ps::KVMeta > > worker_push_queue_;
+
 
 // hash function
 std::mutex hash_mu_;
@@ -125,6 +143,7 @@ volatile bool log_key_info_ = false;
 volatile bool sync_mode_ = true;
 volatile bool debug_mode_ = false;
 volatile bool enable_schedule_ = false;
+size_t num_validators_ = 0;
 
 // debug
 uint64_t debug_key_;

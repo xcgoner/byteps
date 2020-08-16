@@ -68,12 +68,12 @@ void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
       << "error: env BYTEPS_LOCAL_RANK not set";
   BPS_CHECK(getenv("BYTEPS_LOCAL_SIZE"))
       << "error: env BYTEPS_LOCAL_SIZE not set";
-  BPS_CHECK(getenv("DMLC_WORKER_ID")) << "error: env DMLC_WORKER_ID not set";
+  BPS_CHECK(getenv("DMLC_WORKER_ID") || getenv("DMLC_VALIDATOR_ID") ) << "error: env DMLC_WORKER_ID or DMLC_VALIDATOR_ID not set";
   BPS_CHECK(getenv("DMLC_NUM_WORKER")) << "error: env DMLC_NUM_WORKER not set";
 
   *local_rank = atoi(getenv("BYTEPS_LOCAL_RANK"));
   *local_size = atoi(getenv("BYTEPS_LOCAL_SIZE"));
-  *worker_id = atoi(getenv("DMLC_WORKER_ID"));
+  *worker_id = atoi(getenv("DMLC_WORKER_ID") ? getenv("DMLC_WORKER_ID") : getenv("DMLC_VALIDATOR_ID"));
   auto num_worker = atoi(getenv("DMLC_NUM_WORKER"));
 
   // we assume _local_size (i.e., # GPU) is consistent on all workers

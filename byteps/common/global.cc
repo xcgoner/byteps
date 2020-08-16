@@ -260,8 +260,14 @@ ps::KVWorker<char>* BytePSGlobal::GetOrInitPS() {
       ps::StartAsync(0, "byteps\0");
       if (BytePSGlobal::IsResuming() || !ps::Postoffice::Get()->is_recovery()) {
         ps::Postoffice::Get()->Barrier(
-            0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
+            0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler + ps::kValidatorGroup);
     }
+    // debug
+    std::cout << "ps::StartAsyn launched" << std::endl;
+  }
+  else {
+    // debug
+    std::cout << "ps::StartAsyn not launched" << std::endl;
   }
   return _ps;
 }

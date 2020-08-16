@@ -13,6 +13,7 @@ from shutil import rmtree
 import textwrap
 import shlex
 import subprocess
+import glob
 
 from setuptools import find_packages, setup, Command, Extension
 from setuptools.command.build_ext import build_ext
@@ -84,6 +85,30 @@ def is_build_action():
     if sys.argv[1].startswith('install'):
         return True
 
+class CleanCommand(Command):
+    """Custom clean command to tidy up the project root."""
+    CLEAN_FILES = './build ./dist ./*.egg-info ./3rdparty/ps-lite/build'.split(' ')
+
+    user_options = []
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        global here
+
+        for path_spec in self.CLEAN_FILES:
+            # Make paths absolute and relative to this path
+            abs_paths = glob.glob(os.path.normpath(os.path.join(here, path_spec)))
+            for path in [str(p) for p in abs_paths]:
+                if not path.startswith(here):
+                    # Die if path in CLEAN_FILES is absolute + outside this directory
+                    raise ValueError("%s is not a path inside %s" % (path, here))
+                print('removing %s' % os.path.relpath(path))
+                shutil.rmtree(path)
 
 class UploadCommand(Command):
     """Support setup.py upload."""
@@ -992,7 +1017,8 @@ setup(
     # $ setup.py publish support.
     cmdclass={
         'upload': UploadCommand,
-        'build_ext': custom_build_ext
+        'build_ext': custom_build_ext,
+        'clean': CleanCommand
     },
     # cffi is required for PyTorch
     # If cffi is specified in setup_requires, it will need libffi to be installed on the machine,

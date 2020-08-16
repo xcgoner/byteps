@@ -92,6 +92,50 @@ void DoPushPull(void*, void* on_complete_ptr, void* param) {
   ThrowIfError(enqueue_result);
 }
 
+void DoPush(void*, void* on_complete_ptr, void* param) {
+  ThrowIfError(common::CheckInitialized());
+  auto on_complete = *static_cast<Callback*>(on_complete_ptr);
+  auto push_pull_param = static_cast<PushPullParam*>(param);
+  int priority = push_pull_param->priority;
+  int version = push_pull_param->version;
+  NDArray* input = push_pull_param->input.get();
+  BPSContext& context = *push_pull_param->context;
+
+  auto device = TensorUtil::GetDevice(input);
+  auto byteps_input = std::make_shared<MXTensor<NDArray>>(input);
+  auto queue_list = common::GetPushQueueList(device);
+
+  auto enqueue_result = common::EnqueueTensor(
+      context, byteps_input, nullptr, nullptr, device, priority, version,
+      [on_complete](const Status& status) {
+        InvokeCompleteCallback(on_complete, status);
+      },
+      queue_list);
+  ThrowIfError(enqueue_result);
+}
+
+void DoPull(void*, void* on_complete_ptr, void* param) {
+  ThrowIfError(common::CheckInitialized());
+  auto on_complete = *static_cast<Callback*>(on_complete_ptr);
+  auto push_pull_param = static_cast<PushPullParam*>(param);
+  int priority = push_pull_param->priority;
+  int version = push_pull_param->version;
+  NDArray* output = push_pull_param->input.get();
+  BPSContext& context = *push_pull_param->context;
+
+  auto device = TensorUtil::GetDevice(output);
+  auto byteps_output = std::make_shared<MXTensor<NDArray>>(output);
+  auto queue_list = common::GetPullQueueList(device);
+
+  auto enqueue_result = common::EnqueueTensor(
+      context, byteps_output, byteps_output, nullptr, device, priority, version,
+      [on_complete](const Status& status) {
+        InvokeCompleteCallback(on_complete, status);
+      },
+      queue_list);
+  ThrowIfError(enqueue_result);
+}
+
 extern "C" int byteps_mxnet_push_pull_async(NDArray* tensor, char* name,
                                             int version, int priority,
                                             bool is_average) {
@@ -130,9 +174,74 @@ extern "C" int byteps_mxnet_push_pull_async(NDArray* tensor, char* name,
   MX_API_END();
 }
 
+extern "C" int byteps_mxnet_push_async(NDArray* tensor, char* name,
+                                            int version, int priority) {
+  MX_API_BEGIN();
+
+  std::string tensor_name = GetOpName("byteps", name);
+
+  // We need to create a shared_ptr to NDArray object with
+  // shallow copy to prevent from NDArray object being freed
+  // before MXNet engine process it
+  auto tensor_copy = std::make_shared<NDArray>(*tensor);
+  auto& context = common::GetContextFromName(tensor_name);
+  auto dtype = TensorUtil::GetDType(tensor);
+  auto size = TensorUtil::GetSize(tensor);
+  auto device = TensorUtil::GetDevice(tensor);
+  void* cpubuff = (device == CPU_DEVICE_ID)
+                      ? const_cast<void*>(
+                            std::make_shared<MXTensor<NDArray>>(tensor_copy.get())->data())
+                      : nullptr;
+  common::InitTensor(context, size, dtype, cpubuff);
+
+  auto push_pull_param = new PushPullParam(&context, tensor_copy, version, priority);
+  auto var = tensor->var();
+  // Use MXEnginePushAsync instead of Engine::Get()->PushAsync to avoid ABI
+  // compatibility issues
+  MXEnginePushAsync(DoPush, push_pull_param, DeletePushPullParam,
+                    &MX_EXEC_CTX, &var, 1, nullptr, 0,
+                    &MX_FUNC_PROP, 0, "BytePSPush");
+
+  MX_API_END();
+}
+
+extern "C" int byteps_mxnet_pull_async(NDArray* tensor, char* name,
+                                            int version, int priority) {
+  MX_API_BEGIN();
+
+  std::string tensor_name = GetOpName("byteps", name);
+
+  // We need to create a shared_ptr to NDArray object with
+  // shallow copy to prevent from NDArray object being freed
+  // before MXNet engine process it
+  auto tensor_copy = std::make_shared<NDArray>(*tensor);
+  auto& context = common::GetContextFromName(tensor_name);
+  auto dtype = TensorUtil::GetDType(tensor);
+  auto size = TensorUtil::GetSize(tensor);
+  auto device = TensorUtil::GetDevice(tensor);
+  void* cpubuff = (device == CPU_DEVICE_ID)
+                      ? const_cast<void*>(
+                            std::make_shared<MXTensor<NDArray>>(tensor_copy.get())->data())
+                      : nullptr;
+  common::InitTensor(context, size, dtype, cpubuff);
+
+  auto push_pull_param = new PushPullParam(&context, tensor_copy, version, priority);
+  auto var = tensor->var();
+  // Use MXEnginePushAsync instead of Engine::Get()->PushAsync to avoid ABI
+  // compatibility issues
+  MXEnginePushAsync(DoPull, push_pull_param, DeletePushPullParam,
+                    &MX_EXEC_CTX, nullptr, 0, &var, 1,
+                    &MX_FUNC_PROP, 0, "BytePSPull");
+
+  MX_API_END();
+}
+
 extern "C" void byteps_mxnet_declare_tensor(char* name) {
   std::string tensor_name = GetOpName("byteps", name);
   common::IsTensorDeclared(tensor_name);
+  // // debug
+  // auto& context = common::GetContextFromName(tensor_name);
+  // std::cout << "key of " << tensor_name << " is " << context.declared_key << std::endl;
   return;
 }
 

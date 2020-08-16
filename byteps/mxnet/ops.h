@@ -23,6 +23,7 @@
 #include <mxnet/engine.h>
 #include <mxnet/ndarray.h>
 #include "../common/common.h"
+#include "ps/ps.h"
 
 namespace byteps {
 namespace mxnet {
@@ -36,6 +37,12 @@ typedef ::mxnet::Engine::CallbackOnComplete Callback;
 extern "C" int byteps_mxnet_push_pull_async(NDArray* input, char* name,
                                             int version, int priority,
                                             bool is_average);
+
+extern "C" int byteps_mxnet_push_async(NDArray* input, char* name,
+                                            int version, int priority);
+
+extern "C" int byteps_mxnet_pull_async(NDArray* output, char* name,
+                                            int version, int priority);
 
 extern "C" void byteps_mxnet_declare_tensor(char* name);
 
