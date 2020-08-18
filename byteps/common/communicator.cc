@@ -59,7 +59,7 @@ BytePSCommSocket::BytePSCommSocket(std::shared_ptr<BytePSComm> comm,
 
 void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
                             int* local_size, int* worker_id,
-                            BytePSRole* my_role) {
+                            BytePSRole* my_role, int* worker_size, int* validator_size) {
   BPS_LOG(DEBUG) << "Using Communicator=Socket";
 
   // We should init rank, size, etc. using getenv
@@ -75,6 +75,9 @@ void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
   *local_size = atoi(getenv("BYTEPS_LOCAL_SIZE"));
   *worker_id = atoi(getenv("DMLC_WORKER_ID") ? getenv("DMLC_WORKER_ID") : getenv("DMLC_VALIDATOR_ID"));
   auto num_worker = atoi(getenv("DMLC_NUM_WORKER"));
+
+  *worker_size = num_worker;
+  *validator_size = atoi(getenv("DMLC_NUM_VALIDATOR") ? getenv("DMLC_NUM_VALIDATOR") : 0);
 
   // we assume _local_size (i.e., # GPU) is consistent on all workers
   *rank = (*local_rank) + (*worker_id) * (*local_size);

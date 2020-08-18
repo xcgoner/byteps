@@ -62,7 +62,7 @@ class BytePSComm {
   BytePSComm() { _comm = nullptr; }
 
   virtual void init(int* rank, int* size, int* local_rank, int* local_size,
-                    int* worker_id, BytePSRole* my_role) = 0;
+                    int* worker_id, BytePSRole* my_role, int* worker_size, int* validator_size) = 0;
   virtual int sendSignal(int destination, void* data, int len) = 0;
   virtual int sendSignalToRoot(void* data, int len) = 0;
   virtual int recvSignal(int* source, void* data, int max_len) = 0;
@@ -119,7 +119,7 @@ class BytePSCommSocket : public BytePSComm {
   }
 
   void init(int* rank, int* size, int* local_rank, int* local_size,
-            int* worker_id, BytePSRole* my_role);
+            int* worker_id, BytePSRole* my_role, int* worker_size, int* validator_size);
   int sendSignal(int destination, void* data, int len);
   int sendSignalToRoot(void* data, int len);
   int recvSignal(int* source, void* data, int max_len);

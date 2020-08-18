@@ -80,6 +80,28 @@ class BytePSBasics(object):
         os.environ['BYTEPS_GLOBAL_RANK'] = str(global_rank)
         return self.C_LIB_CTYPES.byteps_resume(num_workers, num_servers)
 
+    def worker_size(self):
+        """A function that returns the number of BytePS worker processes.
+        Returns:
+          An integer scalar containing the number of BytePS worker processes.
+        """
+        size = self.C_LIB_CTYPES.byteps_worker_size()
+        if size == -1:
+            raise ValueError(
+                'BytePS has not been initialized; use bps.init().')
+        return size
+    
+    def validator_size(self):
+        """A function that returns the number of BytePS validator processes.
+        Returns:
+          An integer scalar containing the number of BytePS validator processes.
+        """
+        size = self.C_LIB_CTYPES.byteps_validator_size()
+        if size == -1:
+            raise ValueError(
+                'BytePS has not been initialized; use bps.init().')
+        return size
+
     def size(self):
         """A function that returns the number of BytePS processes.
         Returns:

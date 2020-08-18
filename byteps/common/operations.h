@@ -50,6 +50,14 @@ int byteps_rank();
 // Returns -1 if byteps is not initialized.
 int byteps_local_rank();
 
+// C interface to return number of byteps worker processes.
+// Returns -1 if byteps is not initialized.
+int byteps_worker_size();
+
+// C interface to return number of byteps validator processes.
+// Returns -1 if byteps is not initialized.
+int byteps_validator_size();
+
 // C interface to return number of byteps processes.
 // Returns -1 if byteps is not initialized.
 int byteps_size();

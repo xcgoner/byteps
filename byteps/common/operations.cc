@@ -113,6 +113,10 @@ int byteps_rank() { return BytePSGlobal::GetRank(); }
 
 int byteps_local_rank() { return BytePSGlobal::GetLocalRank(); }
 
+int byteps_worker_size() { return BytePSGlobal::GetWorkerSize(); }
+
+int byteps_validator_size() { return BytePSGlobal::GetValidatorSize(); }
+
 int byteps_size() { return BytePSGlobal::GetSize(); }
 
 int byteps_local_size() { return BytePSGlobal::GetLocalSize(); }

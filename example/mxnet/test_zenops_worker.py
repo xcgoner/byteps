@@ -28,30 +28,22 @@ from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor, byteps_pus
 def main():
     bps.init()
 
-    a = mx.nd.ones((5,5)) * (rank()+1)
-    b = mx.nd.ones((3,3)) * (rank()+1) * 4
+    a = mx.nd.ones((5,5,5)) * (rank()+1)
+    b = mx.nd.ones((3,3,3)) * 4
 
     byteps_declare_tensor("parameter_a")
     byteps_declare_tensor("update_b")
 
-    byteps_pull(a, name="parameter_a", priority=0)
-    mx.nd.waitall()
-    print("worker %d pulled parameter_a" % (rank()), a)
-
-    byteps_push(b, name="update_b", priority=0)
-    mx.nd.waitall()
-    print("worker %d pushed update_b" % (rank()), b)
-
     for i in range(5):
         byteps_pull(a, name="parameter_a", priority=0)
         mx.nd.waitall()
-        print("worker %d pulled parameter_a" % (rank()), a)
-
-        b *= 2
+        # print("worker %d pulled parameter_a" % (rank()), a)
 
         byteps_push(b, name="update_b", priority=0)
         mx.nd.waitall()
-        print("worker %d pushed update_b" % (rank()), b)
+        # print("worker %d pushed update_b" % (rank()), b)
+
+        b *= 2
 
 if __name__ == '__main__':
     main()

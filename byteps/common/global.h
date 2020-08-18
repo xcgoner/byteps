@@ -56,6 +56,8 @@ class BytePSGlobal {
 
   static int GetRank() { return _rank; }
   static int GetLocalRank() { return _local_rank; }
+  static int GetWorkerSize() { return _worker_size; }
+  static int GetValidatorSize() { return _validator_size; }
   static int GetSize() { return _size; }
   static int GetLocalSize() { return _local_size; }
   static int GetWorkerID() { return _worker_id; }
@@ -139,6 +141,8 @@ class BytePSGlobal {
   static int _rank;
   static int _local_rank;
   static int _size;
+  static int _worker_size;
+  static int _validator_size;
   static int _local_size;
   static int _worker_id;
   static int _num_worker;

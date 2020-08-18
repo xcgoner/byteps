@@ -30,6 +30,8 @@ int BytePSGlobal::_rank = 0;
 int BytePSGlobal::_local_rank = 0;
 int BytePSGlobal::_size = 1;
 int BytePSGlobal::_local_size = 1;
+int BytePSGlobal::_worker_size = 1;
+int BytePSGlobal::_validator_size = 1;
 int BytePSGlobal::_worker_id = 0;
 int BytePSGlobal::_num_worker = 1;
 BytePSRole BytePSGlobal::_my_role;
@@ -114,7 +116,7 @@ void BytePSGlobal::Init() {
   _basic_comm = std::make_shared<BytePSCommSocket>();
 
   _basic_comm->init(&_rank, &_size, &_local_rank, &_local_size, &_worker_id,
-                    &_my_role);
+                    &_my_role, &_worker_size, &_validator_size);
 
   _is_root_device = (_my_role == LOCAL_ROOT) ? true : false;
 
