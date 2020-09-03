@@ -21,10 +21,20 @@ from __future__ import print_function
 import warnings
 import mxnet as mx
 import os
+import time
+import random
+import math
 
-from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor, byteps_push, byteps_pull
+from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor
 from byteps.mxnet.ops import init, shutdown, suspend, resume
 from byteps.mxnet.ops import size, local_size, rank, local_rank
+
+# zeno ps
+from byteps.mxnet.ops import worker_size, validator_size
+from byteps.mxnet.ops import byteps_push, byteps_pull, byteps_declare_and_init_tensor
+
+from byteps.mxnet.validator import NaiveValidator, TrimmedMeanValidator, PhocasValidator, ZenoValidator, ZenoppValidator, NaiveAsyncValidator
+from byteps.mxnet.attacks import RandomAttack, NegativeAttack
 
 parameter_index = 0
 
@@ -231,3 +241,810 @@ class DistributedTrainer(mx.gluon.Trainer):
                 byteps_pull(param_arrays[0], version=0, priority=0, name="parameter_" + str(idx))
 
         self._params_to_init = tensors
+
+
+# training with validators
+class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
+    """A subclass of MXNet gluon.Trainer.
+
+    There are two differences between DistributedTrainer and Trainer:
+    1. DistributedTrainer calculates gradients using BytePS push pull
+       API while Trainer does it using kvstore push/pull APIs;
+    2. DistributedTrainer performs push_pull(summation) and average,
+       while Trainer only performs push_pull(summation).
+
+    Parameters
+    ----------
+    params : ParameterDict
+        The set of parameters to optimize.
+    optimizer : str or Optimizer
+        The optimizer to use. See
+        `help <http://mxnet.io/api/python/optimization/optimization.html#the-mxnet-optimizer-package>`_
+        on Optimizer for a list of available optimizers.
+    optimizer_params : dict
+        Key-word arguments to be passed to optimizer constructor. For example,
+        `{'learning_rate': 0.1}`. All optimizers accept learning_rate, wd (weight decay),
+        clip_gradient, and lr_scheduler. See each optimizer's
+        constructor for a list of additional supported arguments.
+    """
+
+    def __init__(self, params, optimizer, optimizer_params=None, sync_interval=1, sparse_rate=0.0, attack_params=None):
+        if isinstance(optimizer, DistributedOptimizer):
+            optimizer = optimizer._optimizer
+            warnings.warn("DistributedZenoWorkerSyncTrainer does not take DistributedOptimizer "
+                          "as its optimizer. We have unwrapped it for you.")
+
+        param_list = []
+        if isinstance(params, mx.gluon.ParameterDict):
+            for key in sorted(list(params.keys())):
+                param_list.append(params[key])
+
+        super(DistributedZenoWorkerSyncTrainer, self).__init__(
+            param_list, optimizer, optimizer_params=optimizer_params, kvstore=None)
+
+        self.sync_interval = sync_interval
+        self.sync_counter = 0
+
+        self.sparse_rate = sparse_rate
+
+        self.zenops_initialized = False
+
+        self.attacker = None
+        if attack_params is not None:
+            if attack_params["byz_type"] == "random":
+                self.attacker = RandomAttack(rescale=attack_params["byz_scale"])
+                print("using RandomAttack with rescale=%f" % (self.attacker.rescale))
+            elif attack_params["byz_type"] == "negative":
+                self.attacker = NegativeAttack(rescale=attack_params["byz_scale"])
+                print("using NegativeAttack with rescale=%f" % (self.attacker.rescale))
+            self.byz_rate = attack_params["byz_rate"] if "byz_rate" in attack_params else 0.0
+    
+    def _init_zenops(self):
+        if self.zenops_initialized:
+            return
+        
+        # indicator for worker subsampling
+        self.worker_sparse_indicator = mx.nd.array([1])
+        byteps_declare_and_init_tensor("worker_sparse_indicator", self.worker_sparse_indicator)
+        # indicate whether to send this layer or not, for communication compression
+        self.block_sparse_indicators = []
+
+        # cache for the previous model
+        self.cached_params = []
+
+        for i, param in enumerate(self._params):
+            self.block_sparse_indicators.append(mx.nd.array([1]))
+            if param.grad_req != 'null':
+                byteps_declare_and_init_tensor("block_sparse_indicator_" + str(i), self.block_sparse_indicators[-1])
+                byteps_declare_and_init_tensor("parameter_" + str(i), param.list_data()[0])
+                # initialize the parameters by pulling from validators
+                byteps_pull(param.list_data()[0], priority=0, name="parameter_" + str(i))
+                self.cached_params.append(param.list_data()[0].copy())
+                byteps_declare_and_init_tensor("gradient_" + str(i), param.list_grad()[0])
+            else:
+                self.cached_params.append(None)
+            
+            # print("initialized " + str(i))
+        
+        self.zenops_initialized = True
+        self.sync_counter = 0
+
+        mx.nd.waitall()
+        print("_init_zenops finished")
+
+
+    def step(self, batch_size, ignore_stale_grad=False):
+        """Makes one step of parameter update. Should be called after
+        `autograd.backward()` and outside of `record()` scope.
+
+        For normal parameter updates, `step()` should be used, which internally calls
+        `allreduce_grads()` and then `update()`. However, if you need to get the reduced
+        gradients to perform certain transformation, such as in gradient clipping, then
+        you may want to manually call `allreduce_grads()` and `update()` separately.
+
+        Parameters
+        ----------
+        batch_size : int
+            Batch size of data processed. Gradient will be normalized by `1/batch_size`.
+            Set this to 1 if you normalized loss manually with `loss = mean(loss)`.
+        ignore_stale_grad : bool, optional, default=False
+            If true, ignores Parameters with stale gradient (gradient that has not
+            been updated by `backward` after last step) and skip update.
+        """
+        rescale_grad = self._scale / batch_size
+        self._check_and_rescale_grad(rescale_grad)
+
+        if not self._kv_initialized:
+            self._init_kvstore()
+        if self._params_to_init:
+            self._init_params()
+
+        self._update(ignore_stale_grad)
+
+        self._init_zenops()
+
+        self.sync_counter += 1
+        if self.sync_counter == self.sync_interval:
+            self.sync_counter = 0
+
+            mx.nd.waitall()
+            time.sleep(0.05 * (rank()+1))
+
+            # TODO: worker subsampling
+            # tell the validator that this worker is going to send updates in this round
+            self.worker_sparse_indicator[:] = rank() + 1
+            byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
+            mx.nd.waitall()
+            time.sleep(0.05 * (rank()+1))
+            for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                if param.grad_req != 'null':
+                    param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
+
+                    # TODO: layer sparsification
+                    # tell the validator that this worker is going to send updates in this round
+                    send_layer[:] = rank() + 1
+                    if random.uniform(0, 1) < self.sparse_rate:
+                        # skip communication
+                        send_layer[:] *= (-1)
+
+                        byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+
+                        # error reset
+                        cached_param_data[:] = param.list_grad()[0]
+
+                    else:
+                        cached_param_data[:] = 0
+                        byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+
+                        if self.attacker and self.byz_rate and random.uniform(0, 1) < self.byz_rate:
+                            self.attacker.attack(param.list_grad()[0])
+
+                        byteps_push(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
+                    
+            
+            for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                if param.grad_req != 'null':
+                    param.list_data()[0][:] = 0
+                    byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+                    param.list_data()[0][:] += cached_param_data
+                    cached_param_data[:] = param.list_data()[0]
+            
+            mx.nd.waitall()
+            time.sleep(0.05 * (rank()+1))
+
+# training with validators
+class DistributedZenoValidatorSyncTrainer(mx.gluon.Trainer):
+    """A subclass of MXNet gluon.Trainer.
+
+    There are two differences between DistributedTrainer and Trainer:
+    1. DistributedTrainer calculates gradients using BytePS push pull
+       API while Trainer does it using kvstore push/pull APIs;
+    2. DistributedTrainer performs push_pull(summation) and average,
+       while Trainer only performs push_pull(summation).
+
+    Parameters
+    ----------
+    params : ParameterDict
+        The set of parameters to optimize.
+    optimizer : str or Optimizer
+        The optimizer to use. See
+        `help <http://mxnet.io/api/python/optimization/optimization.html#the-mxnet-optimizer-package>`_
+        on Optimizer for a list of available optimizers.
+    optimizer_params : dict
+        Key-word arguments to be passed to optimizer constructor. For example,
+        `{'learning_rate': 0.1}`. All optimizers accept learning_rate, wd (weight decay),
+        clip_gradient, and lr_scheduler. See each optimizer's
+        constructor for a list of additional supported arguments.
+    """
+
+    def __init__(self, params, optimizer, optimizer_params=None, validation_type="average", sync_interval=1):
+        if isinstance(optimizer, DistributedOptimizer):
+            optimizer = optimizer._optimizer
+            warnings.warn("DistributedZenoValidatorSyncTrainer does not take DistributedOptimizer "
+                          "as its optimizer. We have unwrapped it for you.")
+
+        param_list = []
+        if isinstance(params, mx.gluon.ParameterDict):
+            for key in sorted(list(params.keys())):
+                param_list.append(params[key])
+
+        super(DistributedZenoValidatorSyncTrainer, self).__init__(
+            param_list, optimizer, optimizer_params=optimizer_params, kvstore=None)
+
+        self.sync_interval = sync_interval
+        self.sync_counter = 0
+
+        self.validation_type = validation_type
+        self.zenops_initialized = False
+    
+    def _init_zenops(self):
+        if self.zenops_initialized:
+            return
+        
+        # indicator for worker subsampling
+        self.worker_sparse_indicator = mx.nd.array([1])
+        byteps_declare_and_init_tensor("worker_sparse_indicator", self.worker_sparse_indicator)
+        # indicate whether to send this layer or not, for communication compression
+        self.block_sparse_indicators = []
+
+        # cache for the previous model
+        self.cached_params = []
+
+        # cache for the updates sent from workers
+        self.cached_updates = []
+
+        self.validators = []
+
+        for i, param in enumerate(self._params):
+            self.block_sparse_indicators.append(mx.nd.array([1]))
+            if param.grad_req != 'null':
+                byteps_declare_and_init_tensor("block_sparse_indicator_" + str(i), self.block_sparse_indicators[-1])
+                byteps_declare_and_init_tensor("parameter_" + str(i), param.list_data()[0])
+                # initialize the parameters by pulling from validators
+                if rank() != 0:
+                    param.list_data()[0][:] = 0
+                byteps_push(param.list_data()[0], priority=0, name="parameter_" + str(i))
+                byteps_pull(param.list_data()[0], priority=0, name="parameter_" + str(i))
+                self.cached_params.append(param.list_data()[0].copy())
+
+                byteps_declare_and_init_tensor("gradient_" + str(i), param.list_grad()[0])
+                self.cached_updates.append([param.list_grad()[0].copy()])
+
+                if self.validation_type == "average":
+                    self.validators.append(NaiveValidator())
+                elif self.validation_type == "trimmed_mean":
+                    num_trimmed = int(max(1, worker_size()*0.2))
+                    self.validators.append(TrimmedMeanValidator(num_trimmed=num_trimmed))
+                elif self.validation_type == "phocas":
+                    num_trimmed = int(max(1, worker_size()*0.2))
+                    self.validators.append(PhocasValidator(num_trimmed=num_trimmed))
+                elif self.validation_type == "zeno":
+                    self.validators.append(ZenoValidator(eta=0.01, rho=0.5))
+                else:
+                    raise ValueError('Undefined validation_type: %s' % self.validation_type)
+            else:
+                self.cached_params.append(None)
+                self.cached_updates.append(None)
+                self.validators.append(None)
+            # print("initialized " + str(i))
+        
+        self.zenops_initialized = True
+        self.sync_counter = 0
+        self.validation_counter = 0.0
+        self.recv_counter = 0.0
+
+        mx.nd.waitall()
+        print("_init_zenops finished")
+
+
+    def step(self, batch_size, ignore_stale_grad=False):
+        """Makes one step of parameter update. Should be called after
+        `autograd.backward()` and outside of `record()` scope.
+
+        For normal parameter updates, `step()` should be used, which internally calls
+        `allreduce_grads()` and then `update()`. However, if you need to get the reduced
+        gradients to perform certain transformation, such as in gradient clipping, then
+        you may want to manually call `allreduce_grads()` and `update()` separately.
+
+        Parameters
+        ----------
+        batch_size : int
+            Batch size of data processed. Gradient will be normalized by `1/batch_size`.
+            Set this to 1 if you normalized loss manually with `loss = mean(loss)`.
+        ignore_stale_grad : bool, optional, default=False
+            If true, ignores Parameters with stale gradient (gradient that has not
+            been updated by `backward` after last step) and skip update.
+        """
+        rescale_grad = self._scale / batch_size
+        self._check_and_rescale_grad(rescale_grad)
+
+        if not self._kv_initialized:
+            self._init_kvstore()
+        if self._params_to_init:
+            self._init_params()
+
+        if not self.zenops_initialized or "zeno" in self.validation_type.lower():
+            self._update(ignore_stale_grad)
+            # print("model initialized, only for the first batch")
+        # self._update(ignore_stale_grad)
+
+        self._init_zenops()
+
+        self.sync_counter += 1
+        if self.sync_counter == self.sync_interval:
+            self.sync_counter = 0
+
+            mx.nd.waitall()
+            # time.sleep(0.05 * (worker_size()+rank()+1))
+            time.sleep(0.05)
+
+            # TODO: worker subsampling
+            num_active_workers = 0
+            active_workers = set()
+            for j in range(worker_size()):
+                if j % validator_size() == rank():
+                    byteps_pull(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
+                    active_worker = self.worker_sparse_indicator[0].asscalar()
+                    # assert active_worker not in active_workers
+                    active_workers.add(active_worker)
+                    num_active_workers += (1 if active_worker > 0 else 0)
+            
+            mx.nd.waitall()
+            # time.sleep(0.05 * (worker_size()+rank()+1))
+            time.sleep(0.05)
+
+            for i, (param, cached_param_data, cached_update_list, send_layer, validator) \
+                in enumerate(zip(self._params, self.cached_params, self.cached_updates, self.block_sparse_indicators, self.validators)):
+                if param.grad_req != 'null':
+                    active_layer_workers = set()
+                    for k in range(num_active_workers):
+                        byteps_pull(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+                        active_layer_worker = send_layer[0].asscalar()
+                        # assert active_layer_worker not in active_layer_workers
+                        active_layer_workers.add(active_layer_worker)
+                        if k >= len(cached_update_list):
+                            cached_update_list.append(param.list_grad()[0].copy())
+                        if active_layer_worker > 0:
+                            byteps_pull(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
+                            cached_update_list[k][:] = param.list_grad()[0]
+                        else:
+                            # sparse communication
+                            cached_update_list[k][:] = 0
+                    
+                    validation_info = {'num_tensors': num_active_workers}
+                    if self.validation_type == "average":
+                        pass
+                    elif self.validation_type == "trimmed_mean":
+                        pass
+                    elif self.validation_type == "phocas":
+                        pass
+                    elif self.validation_type == "zeno":
+                        param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
+                        param.list_data()[0][:] = cached_param_data
+                        validation_info.update({'validation_tensor': param.list_grad()[0]})
+                    else:
+                        raise ValueError('Undefined validation_type: %s' % self.validation_type)
+                    if "zeno" in self.validation_type:
+                        self.validation_counter += validator.validate(cached_update_list, cached_update_list[0], validation_info)
+                        self.recv_counter += num_active_workers
+                    else:
+                        validator.validate(cached_update_list, cached_update_list[0], validation_info)
+                    cached_update_list[0] /= validator_size()
+                    param.list_data()[0][:] += cached_update_list[0]
+
+                    # if self.validation_type == "average":
+                    #     for k in range(1, num_active_layer_workers):
+                    #         cached_update_list[0][:] += cached_update_list[k]
+                    #     cached_update_list[0][:] /= (num_active_workers * validator_size())
+                    #     param.list_data()[0][:] += cached_update_list[0]
+                    # else:
+                    #     raise ValueError('Undefined validation_type: %s' % self.validation_type)
+
+                    # after validation is done, push the parameter
+                    byteps_push(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+
+            for i, (param, cached_param_data) in enumerate(zip(self._params, self.cached_params)):
+                if param.grad_req != 'null':
+                    byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+                    cached_param_data[:] = param.list_data()[0]
+            
+            mx.nd.waitall()
+            # time.sleep(0.05 * (worker_size()+rank()+1))
+            time.sleep(0.05)
+                
+
+# # Async
+
+# async training with validators
+class DistributedZenoWorkerAsyncTrainer(mx.gluon.Trainer):
+    """A subclass of MXNet gluon.Trainer.
+
+    There are two differences between DistributedTrainer and Trainer:
+    1. DistributedTrainer calculates gradients using BytePS push pull
+       API while Trainer does it using kvstore push/pull APIs;
+    2. DistributedTrainer performs push_pull(summation) and average,
+       while Trainer only performs push_pull(summation).
+
+    Parameters
+    ----------
+    params : ParameterDict
+        The set of parameters to optimize.
+    optimizer : str or Optimizer
+        The optimizer to use. See
+        `help <http://mxnet.io/api/python/optimization/optimization.html#the-mxnet-optimizer-package>`_
+        on Optimizer for a list of available optimizers.
+    optimizer_params : dict
+        Key-word arguments to be passed to optimizer constructor. For example,
+        `{'learning_rate': 0.1}`. All optimizers accept learning_rate, wd (weight decay),
+        clip_gradient, and lr_scheduler. See each optimizer's
+        constructor for a list of additional supported arguments.
+    """
+
+    def __init__(self, params, optimizer, optimizer_params=None, rho = 0, sync_interval=1, sparse_rate=0.0, attack_params=None):
+        if isinstance(optimizer, DistributedOptimizer):
+            optimizer = optimizer._optimizer
+            warnings.warn("DistributedZenoWorkerAsyncTrainer does not take DistributedOptimizer "
+                          "as its optimizer. We have unwrapped it for you.")
+
+        param_list = []
+        if isinstance(params, mx.gluon.ParameterDict):
+            for key in sorted(list(params.keys())):
+                param_list.append(params[key])
+
+        super(DistributedZenoWorkerAsyncTrainer, self).__init__(
+            param_list, optimizer, optimizer_params=optimizer_params, kvstore=None)
+
+        assert 0 <= rho < 1
+        self.rho = rho
+
+        self.sync_interval = sync_interval
+        self.sync_counter = 0
+
+        self.sparse_rate = sparse_rate
+
+        self.zenops_initialized = False
+
+        self.attacker = None
+        if attack_params is not None:
+            if attack_params["byz_type"] == "random":
+                self.attacker = RandomAttack(rescale=attack_params["byz_scale"])
+                print("using RandomAttack with rescale=%f" % (self.attacker.rescale))
+            elif attack_params["byz_type"] == "negative":
+                self.attacker = NegativeAttack(rescale=attack_params["byz_scale"])
+                print("using NegativeAttack with rescale=%f" % (self.attacker.rescale))
+            self.byz_rate = attack_params["byz_rate"] if "byz_rate" in attack_params else 0.0
+    
+    def _init_zenops(self):
+        if self.zenops_initialized:
+            return
+
+        # timestamps
+        self.global_timestamp = mx.nd.array([0])
+        self.local_timestamp = mx.nd.array([0])
+        byteps_declare_and_init_tensor("global_timestamp", self.global_timestamp)
+        
+        # indicator for worker subsampling
+        self.worker_sparse_indicator = mx.nd.array([1])
+        byteps_declare_and_init_tensor("worker_sparse_indicator", self.worker_sparse_indicator)
+        # indicate whether to send this layer or not, for communication compression
+        self.block_sparse_indicators = []
+
+        # cache for the previous model
+        self.cached_params = []
+
+        for i, param in enumerate(self._params):
+            self.block_sparse_indicators.append(mx.nd.array([1]))
+            if param.grad_req != 'null':
+                byteps_declare_and_init_tensor("block_sparse_indicator_" + str(i), self.block_sparse_indicators[-1])
+                byteps_declare_and_init_tensor("parameter_" + str(i), param.list_data()[0])
+                byteps_declare_and_init_tensor("gradient_" + str(i), param.list_grad()[0])
+            
+        while self.global_timestamp.asscalar() == 0:
+            print("blocked until the model is initialized on server")
+            time.sleep(0.1)
+            byteps_pull(self.global_timestamp, priority=0, name="global_timestamp")
+        print("current timestamp is %d" % (self.global_timestamp.asscalar()))
+
+        for i, param in enumerate(self._params):
+            if param.grad_req != 'null':
+                # initialize the parameters by pulling from validators
+                byteps_pull(param.list_data()[0], priority=0, name="parameter_" + str(i))
+                self.cached_params.append(param.list_data()[0].copy())
+            else:
+                self.cached_params.append(None)
+        
+        self.zenops_initialized = True
+        self.sync_counter = 0
+
+        mx.nd.waitall()
+        print("_init_zenops finished")
+
+
+    def step(self, batch_size, ignore_stale_grad=False):
+        """Makes one step of parameter update. Should be called after
+        `autograd.backward()` and outside of `record()` scope.
+
+        For normal parameter updates, `step()` should be used, which internally calls
+        `allreduce_grads()` and then `update()`. However, if you need to get the reduced
+        gradients to perform certain transformation, such as in gradient clipping, then
+        you may want to manually call `allreduce_grads()` and `update()` separately.
+
+        Parameters
+        ----------
+        batch_size : int
+            Batch size of data processed. Gradient will be normalized by `1/batch_size`.
+            Set this to 1 if you normalized loss manually with `loss = mean(loss)`.
+        ignore_stale_grad : bool, optional, default=False
+            If true, ignores Parameters with stale gradient (gradient that has not
+            been updated by `backward` after last step) and skip update.
+        """
+        rescale_grad = self._scale / batch_size
+        self._check_and_rescale_grad(rescale_grad)
+
+        if not self._kv_initialized:
+            self._init_kvstore()
+        if self._params_to_init:
+            self._init_params()
+
+        self._update(ignore_stale_grad)
+
+        # proximal update
+        if self.zenops_initialized and self.rho:
+            for i, (param, cached_param_data) in enumerate(zip(self._params, self.cached_params)):
+                if param.grad_req != 'null':
+                    param.list_data()[0][:] *= (1-self.rho)
+                    param.list_data()[0][:] += cached_param_data * self.rho
+
+        self._init_zenops()
+
+        self.sync_counter += 1
+        if self.sync_counter == self.sync_interval:
+            self.sync_counter = 0
+
+            mx.nd.waitall()
+            time.sleep(0.15 * (rank()+1))
+
+            # TODO: worker subsampling
+            # tell the validator that this worker is going to send updates in this round
+            self.worker_sparse_indicator[:] = rank() + 1
+            byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
+            mx.nd.waitall()
+            time.sleep(0.15 * (rank()+1))
+            for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                if param.grad_req != 'null':
+                    param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
+
+                    # TODO: layer sparsification
+                    # tell the validator that this worker is going to send updates in this round
+                    send_layer[:] = rank() + 1
+                    if random.uniform(0, 1) < self.sparse_rate:
+                        # skip communication
+                        send_layer[:] *= (-1)
+
+                        byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+
+                        # error reset
+                        cached_param_data[:] = param.list_grad()[0]
+
+                    else:
+                        cached_param_data[:] = 0
+                        byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+
+                        if self.attacker and self.byz_rate and random.uniform(0, 1) < self.byz_rate:
+                            self.attacker.attack(param.list_grad()[0])
+
+                        byteps_push(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
+            
+            while self.global_timestamp.asscalar() <= self.local_timestamp.asscalar():
+                time.sleep(0.1)
+                byteps_pull(self.global_timestamp, name="global_timestamp", priority=0)
+            self.local_timestamp[:] = self.global_timestamp
+            
+            for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                if param.grad_req != 'null':
+                    param.list_data()[0][:] = 0
+                    byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+                    param.list_data()[0][:] += cached_param_data
+                    cached_param_data[:] = param.list_data()[0]
+            
+            mx.nd.waitall()
+            time.sleep(0.15 * (rank()+1))
+
+# async validation
+class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
+    """A subclass of MXNet gluon.Trainer.
+
+    There are two differences between DistributedTrainer and Trainer:
+    1. DistributedTrainer calculates gradients using BytePS push pull
+       API while Trainer does it using kvstore push/pull APIs;
+    2. DistributedTrainer performs push_pull(summation) and average,
+       while Trainer only performs push_pull(summation).
+
+    Parameters
+    ----------
+    params : ParameterDict
+        The set of parameters to optimize.
+    optimizer : str or Optimizer
+        The optimizer to use. See
+        `help <http://mxnet.io/api/python/optimization/optimization.html#the-mxnet-optimizer-package>`_
+        on Optimizer for a list of available optimizers.
+    optimizer_params : dict
+        Key-word arguments to be passed to optimizer constructor. For example,
+        `{'learning_rate': 0.1}`. All optimizers accept learning_rate, wd (weight decay),
+        clip_gradient, and lr_scheduler. See each optimizer's
+        constructor for a list of additional supported arguments.
+    """
+
+    def __init__(self, params, optimizer, optimizer_params=None, rho = 0, validation_type="zenopp", sync_interval=1):
+        if isinstance(optimizer, DistributedOptimizer):
+            optimizer = optimizer._optimizer
+            warnings.warn("DistributedZenoValidatorAsyncTrainer does not take DistributedOptimizer "
+                          "as its optimizer. We have unwrapped it for you.")
+
+        param_list = []
+        if isinstance(params, mx.gluon.ParameterDict):
+            for key in sorted(list(params.keys())):
+                param_list.append(params[key])
+
+        super(DistributedZenoValidatorAsyncTrainer, self).__init__(
+            param_list, optimizer, optimizer_params=optimizer_params, kvstore=None)
+        
+        self.rho = rho
+
+        self.sync_interval = sync_interval
+        self.sync_counter = 0
+
+        self.validation_type = validation_type
+        self.zenops_initialized = False
+    
+    def _init_zenops(self):
+        if self.zenops_initialized:
+            return
+
+        # timestamps
+        self.global_timestamp = mx.nd.array([0])
+        self.local_timestamp = mx.nd.array([0])
+        byteps_declare_and_init_tensor("global_timestamp", self.global_timestamp)
+        
+        # indicator for worker subsampling
+        self.worker_sparse_indicator = mx.nd.array([1])
+        byteps_declare_and_init_tensor("worker_sparse_indicator", self.worker_sparse_indicator)
+        # indicate whether to send this layer or not, for communication compression
+        self.block_sparse_indicators = []
+
+        # cache for the previous model
+        self.cached_params = []
+
+        # cache for the updates sent from workers
+        self.cached_updates = []
+
+        self.validators = []
+
+        for i, param in enumerate(self._params):
+            self.block_sparse_indicators.append(mx.nd.array([1]))
+            if param.grad_req != 'null':
+                byteps_declare_and_init_tensor("block_sparse_indicator_" + str(i), self.block_sparse_indicators[-1])
+                byteps_declare_and_init_tensor("parameter_" + str(i), param.list_data()[0])
+                # initialize the parameters by pulling from validators
+                if rank() != 0:
+                    param.list_data()[0][:] = 0
+                byteps_push(param.list_data()[0], priority=0, name="parameter_" + str(i))
+
+                byteps_declare_and_init_tensor("gradient_" + str(i), param.list_grad()[0])
+                self.cached_updates.append(param.list_grad()[0].copy())
+
+                if self.validation_type == "zenopp":
+                    self.validators.append(ZenoppValidator(eta=0.01, rho=0.5, alpha=math.sqrt(1./worker_size())))
+                elif self.validation_type == "naive_async":
+                    self.validators.append(NaiveAsyncValidator(alpha=math.sqrt(1./worker_size())))
+                else:
+                    raise ValueError('Undefined validation_type: %s' % self.validation_type)
+            else:
+                self.cached_updates.append(None)
+                self.validators.append(None)
+            # print("initialized " + str(i))
+        
+        print("model initialized")
+        
+        if rank() == 0:
+            self.global_timestamp[:] = 1
+            byteps_push(self.global_timestamp, priority=-1, name="global_timestamp")
+        self.global_timestamp[:] = 0
+        while self.global_timestamp.asscalar() == 0:
+            print("blocked until the model is initialized on server")
+            time.sleep(0.1)
+            byteps_pull(self.global_timestamp, priority=0, name="global_timestamp")
+        print("current timestamp is %d" % (self.global_timestamp.asscalar()))
+
+        for i, param in enumerate(self._params):
+            if param.grad_req != 'null':
+                byteps_pull(param.list_data()[0], priority=0, name="parameter_" + str(i))
+                self.cached_params.append(param.list_data()[0].copy())
+            else:
+                self.cached_params.append(None)
+        
+        self.zenops_initialized = True
+        self.sync_counter = 0
+        self.validation_counter = 0.0
+        self.recv_counter = 0.0
+
+        mx.nd.waitall()
+        print("_init_zenops finished")
+
+
+    def step(self, batch_size, ignore_stale_grad=False):
+        """Makes one step of parameter update. Should be called after
+        `autograd.backward()` and outside of `record()` scope.
+
+        For normal parameter updates, `step()` should be used, which internally calls
+        `allreduce_grads()` and then `update()`. However, if you need to get the reduced
+        gradients to perform certain transformation, such as in gradient clipping, then
+        you may want to manually call `allreduce_grads()` and `update()` separately.
+
+        Parameters
+        ----------
+        batch_size : int
+            Batch size of data processed. Gradient will be normalized by `1/batch_size`.
+            Set this to 1 if you normalized loss manually with `loss = mean(loss)`.
+        ignore_stale_grad : bool, optional, default=False
+            If true, ignores Parameters with stale gradient (gradient that has not
+            been updated by `backward` after last step) and skip update.
+        """
+        rescale_grad = self._scale / batch_size
+        self._check_and_rescale_grad(rescale_grad)
+
+        if not self._kv_initialized:
+            self._init_kvstore()
+        if self._params_to_init:
+            self._init_params()
+
+        if not self.zenops_initialized or "zeno" in self.validation_type.lower():
+            self._update(ignore_stale_grad)
+            
+            # proximal update
+            if self.zenops_initialized and self.rho:
+                for i, (param, cached_param_data) in enumerate(zip(self._params, self.cached_params)):
+                    if param.grad_req != 'null':
+                        param.list_data()[0][:] *= (1-self.rho)
+                        param.list_data()[0][:] += cached_param_data * self.rho
+
+        self._init_zenops()
+
+        self.sync_counter += 1
+        if self.sync_counter == self.sync_interval:
+            self.sync_counter = 0
+
+            for i, (param, cached_param_data, cached_update_data) \
+                in enumerate(zip(self._params, self.cached_params, self.cached_updates)):
+                if param.grad_req != 'null':
+                    cached_update_data[:] = param.list_data()[0] - cached_param_data
+                    param.list_data()[0][:] = cached_param_data
+
+            mx.nd.waitall()
+            time.sleep(0.05 * (worker_size()+rank()+1))
+
+            # TODO: worker subsampling
+            for j in range(worker_size()):
+                if j % validator_size() == rank():
+                    byteps_pull(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
+                    active_worker = self.worker_sparse_indicator[0].asscalar()
+                    mx.nd.waitall()
+                    if active_worker > 0:
+
+                        for i, (param, cached_param_data, cached_update_data, send_layer, validator) \
+                            in enumerate(zip(self._params, self.cached_params, self.cached_updates, self.block_sparse_indicators, self.validators)):
+                            if param.grad_req != 'null':
+                                byteps_pull(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+                                active_layer_worker = send_layer[0].asscalar()
+                                if active_layer_worker > 0:
+                                    byteps_pull(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
+                            
+                                    if self.validation_type == "zenopp":
+                                        validation_info = {'validation_tensor': cached_update_data}
+                                    elif self.validation_type == "naive_async":
+                                        validation_info = None
+                                    else:
+                                        raise ValueError('Undefined validation_type: %s' % self.validation_type)
+                                    if "zeno" in self.validation_type:
+                                        self.validation_counter += validator.validate(param.list_grad()[0], param.list_grad()[0], validation_info)
+                                        self.recv_counter += 1
+                                    else:
+                                        validator.validate(param.list_grad()[0], param.list_grad()[0], validation_info)
+                                    
+                                    param.list_data()[0][:] = param.list_grad()[0]
+
+                                    # after validation is done, push the update to the server
+                                    byteps_push(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+                        self.global_timestamp[:] = 1
+                        byteps_push(self.global_timestamp, priority=-1, name="global_timestamp")
+            
+                        mx.nd.waitall()
+                        time.sleep(0.05)
+            
+            for i, (param, cached_param_data) \
+                in enumerate(zip(self._params, self.cached_params)):
+                if param.grad_req != 'null':
+                    byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+                    cached_param_data[:] = param.list_data()[0]
+            mx.nd.waitall()
+            time.sleep(0.01)

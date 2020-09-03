@@ -23,25 +23,32 @@ import mxnet as mx
 
 import byteps.mxnet as bps
 from byteps.mxnet.ops import size, local_size, rank, local_rank
-from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor, byteps_push, byteps_pull
+from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor, byteps_push, byteps_pull, byteps_declare_and_init_tensor
 
 def main():
     bps.init()
 
     a = mx.nd.ones((5,5,5)) * (rank()+1)
     b = mx.nd.ones((3,3,3)) * 4
+    c = mx.nd.array([0])
 
-    byteps_declare_tensor("parameter_a")
-    byteps_declare_tensor("update_b")
+    byteps_declare_and_init_tensor("parameter_a", a)
+    byteps_declare_and_init_tensor("update_b", b)
+    byteps_declare_and_init_tensor("indicator_c", c)
 
     for i in range(5):
         byteps_pull(a, name="parameter_a", priority=0)
         mx.nd.waitall()
-        # print("worker %d pulled parameter_a" % (rank()), a)
+        # print("worker %d pulled parameter_a" % (rank()), a.asnumpy()[0])
 
         byteps_push(b, name="update_b", priority=0)
         mx.nd.waitall()
-        # print("worker %d pushed update_b" % (rank()), b)
+        # print("worker %d pushed update_b" % (rank()), b.asnumpy()[0])
+
+        c[:] = i + rank()*10
+        byteps_push(c, name="indicator_c", priority=0)
+        mx.nd.waitall()
+        print("worker %d pushed indicator_c" % (rank()), c.asnumpy()[0])
 
         b *= 2
 

@@ -3,7 +3,7 @@
 Launch a distributed job for BytePS
 """
 import argparse
-import os, sys
+import os, sys, time
 import signal
 import logging
 import subprocess
@@ -63,10 +63,10 @@ def start_ssh(prog, node, port, username, fname):
     if username is not None:
         prog = 'ssh -o StrictHostKeyChecking=no ' + ' -l ' + username \
                + ' ' + node + ' -p ' + port + ' \'' + prog + '\'' \
-               + ' > ' + pname + '.stdout' + ' 2>' + pname + '.stderr&'
+               + ' >> ' + pname + '.stdout' + ' 2>>' + pname + '.stderr&'
     else:
         prog = 'ssh -o StrictHostKeyChecking=no ' + node + ' -p ' + port + ' \'' + prog + '\'' \
-               + ' > ' + pname + '.stdout' + ' 2>' + pname + '.stderr&'
+               + ' >> ' + pname + '.stdout' + ' 2>>' + pname + '.stderr&'
     print(prog)
 
     thread = Thread(target=run, args=(prog,))
@@ -110,11 +110,15 @@ def submit(args):
         pass_envs['DMLC_ROLE'] = name
         prog = get_env(pass_envs) + args.server_command
         threads.append(start_ssh(prog, node, port, username, name))
+        time.sleep(1)
     for i, (node, port, _) in enumerate(server_hosts):
         name = 'server'
         pass_envs['DMLC_ROLE'] = name
+        if args.sync_mode == "async":
+            pass_envs['BYTEPS_ENABLE_ASYNC'] = 1
         prog = get_env(pass_envs) + args.server_command
         threads.append(start_ssh(prog, node, port, username, name + str(i)))
+        time.sleep(1)
     for i, (node, port, gpu_id) in enumerate(worker_hosts):
         name = 'worker'
         pass_envs['DMLC_ROLE'] = "worker"
@@ -124,6 +128,8 @@ def submit(args):
             pass_envs['NVIDIA_VISIBLE_DEVICES'] = str(gpu_id)
         prog = get_env(pass_envs) + args.worker_command
         threads.append(start_ssh(prog, node, port, username, name + str(i)))
+        time.sleep(1)
+    del pass_envs['DMLC_WORKER_ID']
     for i, (node, port, gpu_id) in enumerate(validator_hosts):
         name = 'validator'
         pass_envs['DMLC_ROLE'] = "worker"
@@ -133,6 +139,7 @@ def submit(args):
             pass_envs['NVIDIA_VISIBLE_DEVICES'] = str(gpu_id)
         prog = get_env(pass_envs) + args.validator_command
         threads.append(start_ssh(prog, node, port, username, name + str(i)))
+        time.sleep(1)
 
     for t in threads:
         t.join()
@@ -165,6 +172,8 @@ def main():
                         help = 'command for workers')
     parser.add_argument('--validator-command', type=str, required=True,
                         help = 'command for validators')
+    parser.add_argument('--sync-mode', type=str, default='sync',
+                        help = 'sync or async')
 
     args = parser.parse_args()
 

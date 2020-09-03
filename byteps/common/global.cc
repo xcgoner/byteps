@@ -268,8 +268,10 @@ ps::KVWorker<char>* BytePSGlobal::GetOrInitPS() {
     std::cout << "ps::StartAsyn launched" << std::endl;
   }
   else {
-    // debug
-    std::cout << "ps::StartAsyn not launched" << std::endl;
+    if (!_ps) {
+      // debug
+      std::cout << "ps::StartAsyn not launched" << std::endl;
+    }
   }
   return _ps;
 }

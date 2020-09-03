@@ -86,6 +86,8 @@ int CpuReducer::sum(void* dst, void* src, size_t len, DataType dtype) {
 
 template <typename T>
 int CpuReducer::_sum(T* dst, T* src, size_t len) {
+  // // debug
+  // std::cout << "CpuReducer: " << dst[0] << " + " << src[0] << " = " << dst[0] + src[0] << std::endl;
 #pragma omp parallel for simd num_threads(_num_threads)
   for (size_t i = 0; i < len / (size_t)sizeof(T); ++i) {
     dst[i] = dst[i] + src[i];
@@ -165,6 +167,8 @@ int CpuReducer::sum(void* dst, void* src1, void* src2, size_t len,
 
 template <typename T>
 int CpuReducer::_sum(T* dst, T* src1, T* src2, size_t len) {
+  // // debug
+  // std::cout << "CpuReducer: " << src1[0] << " + " << src2[0] << " = " << src1[0] + src2[0] << std::endl;
 #pragma omp parallel for simd num_threads(_num_threads)
   for (size_t i = 0; i < len / (size_t)sizeof(T); ++i) {
     dst[i] = src1[i] + src2[i];

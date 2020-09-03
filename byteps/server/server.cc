@@ -15,6 +15,7 @@
 
 #include "server.h"
 #include "queue.h"
+#include "../common/common.h"
 
 namespace byteps {
 namespace server {
@@ -25,6 +26,40 @@ using namespace ps;
 std::vector<PriorityQueue*> engine_queues_;
 std::vector<std::thread *> engine_threads_;
 
+template <typename T>
+void print_first_element(T* a) {
+  PS_VLOG(1) << "Array value: " << a[0];
+}
+
+void print_array(char* a, common::DataType dtype, const std::string& s) {
+  PS_VLOG(1) << "Array address: " << static_cast<void*>(a);
+  switch (dtype) {
+    case common::BYTEPS_FLOAT32:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<float*>(a));
+    case common::BYTEPS_FLOAT64:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<double*>(a));
+    case common::BYTEPS_FLOAT16:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<float*>(a));
+    case common::BYTEPS_UINT8:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<uint8_t*>(a));
+    case common::BYTEPS_INT32:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<int32_t*>(a));
+    case common::BYTEPS_INT8:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<int8_t*>(a));
+    case common::BYTEPS_INT64:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<int64_t*>(a));
+    default:
+      BPS_CHECK(0) << "Unsupported data type: " << dtype;
+  }
+}
+
 BytePSArray* GetStore(uint64_t key) {
   std::lock_guard<std::mutex> lock(store_mu_);
   return &store_[key];
@@ -33,7 +68,8 @@ BytePSArray* GetStore(uint64_t key) {
 BytePSArray* GetWorkerCache(uint64_t key, uint64_t worker_id) {
   // TODO: we may not need this mutex
   std::lock_guard<std::mutex> lock(worker_cache_mu_);
-  return &worker_cache_[{key, worker_id}];
+  // return &worker_cache_[{key, worker_id}];
+  return &worker_cache_[key][worker_id];
 }
 
 void SendPushResponse(uint64_t key, const ps::KVMeta& req, ps::KVServer<char>* server){
@@ -85,20 +121,25 @@ void SendPullResponse(const DataHandleType type,
   std::lock_guard<std::mutex> lock(pullresp_mu_);
   CHECK(src) << "init stored tensor first";
 
-  // send pull response
-  auto iterator = pull_response_map_.find(key);
-  if (iterator == pull_response_map_.end()) { // new key
-    ps::KVPairs<char> response;
-    response.keys = {EncodeKey(key)};
-    response.lens = {len};
-    response.vals = ps::SArray<char>(src, len, false); // zero copy
-    pull_response_map_[key] = response; // add to the map
-    server->Response(req_meta, response);
-  } else { // not new key, then reuse the memory address to avoid ibv_reg_mr on RDMA data path
-    ps::KVPairs<char> *response = &iterator->second;
-    response->vals = ps::SArray<char>(src, len, false);
-    server->Response(req_meta, *response);
-  }
+  // // send pull response
+  // auto iterator = pull_response_map_.find(key);
+  // if (iterator == pull_response_map_.end()) { // new key
+  //   ps::KVPairs<char> response;
+  //   response.keys = {EncodeKey(key)};
+  //   response.lens = {len};
+  //   response.vals = ps::SArray<char>(src, len, false); // zero copy
+  //   pull_response_map_[key] = response; // add to the map
+  //   server->Response(req_meta, response);
+  // } else { // not new key, then reuse the memory address to avoid ibv_reg_mr on RDMA data path
+  //   ps::KVPairs<char> *response = &iterator->second;
+  //   response->vals = ps::SArray<char>(src, len, false);
+  //   server->Response(req_meta, *response);
+  // }
+  ps::KVPairs<char> response;
+  response.keys = {EncodeKey(key)};
+  response.lens = {len};
+  response.vals = ps::SArray<char>(src, len, false); // zero copy
+  server->Response(req_meta, response);
 }
 
 void BytePSServerEngineThread(int i) {
@@ -187,9 +228,9 @@ void BytePSServerEngineThread(int i) {
         auto it = q_pull_reqmeta_[i][msg.key].begin();
         while (it != q_pull_reqmeta_[i][msg.key].end()) {
           if (seen_sender_[i][msg.key].find(it->sender) == seen_sender_[i][msg.key].end()) {
-            if (Postoffice::Get()->verbose() >= 2) {
+            if (Postoffice::Get()->verbose() >= 1) {
               bool is_from_validator = (Postoffice::IDtoRole(it->sender) == Node::VALIDATOR);
-              PS_VLOG(2) << "parameter pull response sent to " << (is_from_validator ? "validator " : "worker ") << Postoffice::IDtoRank(it->sender);
+              PS_VLOG(1) << "parameter pull response sent to " << (is_from_validator ? "validator " : "worker ") << Postoffice::IDtoRank(it->sender);
             }
             SendPullResponse(msg.type, msg.key, *it, byteps_server_);
             pull_cnt_[i][msg.key] += 1;
@@ -460,9 +501,7 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
       for (const auto& req : updates.request) {
         SendPushResponse(key, req, server);
       }
-      if (Postoffice::Get()->verbose() >= 2) {
-        PS_VLOG(2) << "Init push finished";
-      }
+      PS_VLOG(1) << "Init push finished";
       updates.request.clear();
     } 
     else {
@@ -471,9 +510,7 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
       if (is_from_validator) {
         // push from a validator, must be pulled by both workers and validators
         // debug
-        if (Postoffice::Get()->verbose() >= 2) {
-          PS_VLOG(2) << "push from validator " << Postoffice::IDtoRank(req_meta.sender) << " with len=" << len;
-        }
+        PS_VLOG(1) << "parameter pushed by validator " << Postoffice::IDtoRank(req_meta.sender);
         is_global_shared_[key] = true;
         auto &updates = update_buf_[key];
         if (updates.request.empty()) { // from the first incoming worker
@@ -508,11 +545,14 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
                       << "addr: " << DEBUG_PRINT_TENSOR_ADDRESS(recved);
           }
           if (is_engine_blocking_) {
+            PS_VLOG(1) << "direct sum";
             CHECK_GE(bps_reducer_->sum((void *) updates.merged.tensor,
                                       (void *) recved,
                                       len,
                                       bps_reducer_->GetDataType(updates.merged.dtype)), 0);
           } else { // non-blocking
+            // debug
+            PS_VLOG(1) << "trigger SUM_RECV";
             BytePSEngineMessage msg = {timestamp_++, type, key, updates.merged.tensor, recved, len, SUM_RECV, req_data, req_meta};
             engine_queues_[tid]->Push(msg);
           }
@@ -533,9 +573,7 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
           if (is_engine_blocking_) {
             bps_reducer_->copy(stored->tensor, updates.merged.tensor, len);
           } else {
-            if (Postoffice::Get()->verbose() >= 2) {
-              PS_VLOG(2) << "Validator push finished, trigger COPY_MERGED_VALIDATED";
-            }
+            PS_VLOG(1) << "Validator push finished, trigger COPY_MERGED_VALIDATED";
             BytePSEngineMessage msg = {timestamp_++, type, key, stored->tensor, update.tensor, len, COPY_MERGED_VALIDATED};
             engine_queues_[tid]->Push(msg);
             engine_queues_[tid]->ClearCounter(key);
@@ -548,9 +586,11 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
       }
       else {
         // push from a worker, must be pulled by validators only
+        // the validators will keep pulling, doesn't matter if it's sync or async
         // debug
+        PS_VLOG(1) << "push from worker " << Postoffice::IDtoRank(req_meta.sender) << " with len=" << len;
         if (Postoffice::Get()->verbose() >= 2) {
-          PS_VLOG(2) << "push from worker " << Postoffice::IDtoRank(req_meta.sender) << " with len=" << len;
+          print_array(recved, bps_reducer_->GetDataType(type.dtype), "");
         }
         is_global_shared_[key] = false;
         if (validator_pull_queue_[key].empty()) {
@@ -565,12 +605,27 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
           }
           bps_reducer_->copy(worker_cached->tensor, recved, len);
           worker_push_queue_[key].push(req_meta);
+          PS_VLOG(1) << "no update pulled so far, cache the push from worker " << Postoffice::IDtoRank(req_meta.sender);
+          // print_array(recved, bps_reducer_->GetDataType(type.dtype), "");
+          // print_array(worker_cached->tensor, bps_reducer_->GetDataType(worker_cached->dtype), "");
         }
         else {
           // there is pull waiting, send responses immediately
           auto pull_req_meta = validator_pull_queue_[key].front();
-          SendPullResponse(type, key, recved, len, pull_req_meta, server);
           validator_pull_queue_[key].pop();
+          auto worker_cached = GetWorkerCache(key, req_meta.sender);
+          if (!worker_cached->tensor) {
+            // init stored buffer, use page aligned memory
+            PageAlignedMalloc((void**) &worker_cached->tensor, len);
+            worker_cached->len = len;
+            worker_cached->dtype = type.dtype;
+            CHECK(worker_cached->tensor);
+          }
+          bps_reducer_->copy(worker_cached->tensor, recved, len);
+          SendPullResponse(type, key, worker_cached->tensor, len, pull_req_meta, server);
+          // PS_VLOG(1) << "immediately respond the pull from validator " << Postoffice::IDtoRank(pull_req_meta.sender) << ", using push from worker " << Postoffice::IDtoRank(req_meta.sender);
+          // PS_VLOG(1) << "push by worker, send gradient from worker " << Postoffice::IDtoRank(req_meta.sender) << " to validator " << Postoffice::IDtoRank(pull_req_meta.sender);
+          // print_array(worker_cached->tensor, bps_reducer_->GetDataType(worker_cached->dtype), "");
         }
         SendPushResponse(key, req_meta, server);
       }
@@ -582,14 +637,14 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
     }
     if (is_global_shared_[key]) {
       // pulled by validator or worker, which is validated parameter 
-      if (Postoffice::Get()->verbose() >= 2) {
-        PS_VLOG(2) << "parameter pulled by " << (is_from_validator ? "validator " : "worker ") << Postoffice::IDtoRank(req_meta.sender);
-      }
+      PS_VLOG(1) << "parameter pulled by " << (is_from_validator ? "validator " : "worker ") << Postoffice::IDtoRank(req_meta.sender);
       auto stored = GetStore(key);
       CHECK(stored->tensor) << "Should init the buffer for key=" << key << " first";
       if (is_engine_blocking_ || !sync_mode_) {
+        // if async, respond immediately
         SendPullResponse(type, key, req_meta, server);
       } else {
+        // sync mode
         auto tid = GetThreadID(key, 0);
         std::lock_guard<std::mutex> lock(flag_mu_[tid]);
         if (is_push_finished_[tid].find(key) == is_push_finished_[tid].end()) {
@@ -601,10 +656,8 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
         auto it = seen_sender_[tid][key].find(req_meta.sender);
         if (is_push_finished_[tid][key] && (it == seen_sender_[tid][key].end())) {
           // push already finished && not received the associated pull response yet
-          if (Postoffice::Get()->verbose() >= 2) {
-            PS_VLOG(2) << "parameter pull response sent to " << (is_from_validator ? "validator " : "worker ") << Postoffice::IDtoRank(req_meta.sender);
-          }
           SendPullResponse(type, key, req_meta, server);
+          PS_VLOG(1) << "parameter pull response sent to " << (is_from_validator ? "validator " : "worker ") << Postoffice::IDtoRank(req_meta.sender);
           pull_cnt_[tid][key] += 1;
           seen_sender_[tid][key].insert(req_meta.sender);
 
@@ -622,20 +675,23 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
     }
     else {
       // pulled by validator, gradient/update to be validated
-      if (Postoffice::Get()->verbose() >= 2) {
-        PS_VLOG(2) << "update sent by worker, pulled by " << "validator " << Postoffice::IDtoRank(req_meta.sender);
-      }
+      // the validators will keep pulling, doesn't matter if it's sync or async
+      // PS_VLOG(1) << "update sent by worker, pulled by validator " << Postoffice::IDtoRank(req_meta.sender);
       if (worker_push_queue_[key].empty()) {
         // no push so far, cache the pull
         validator_pull_queue_[key].push(req_meta);
+        // PS_VLOG(1) << "no update pushed so far, cache the pull from validator " << Postoffice::IDtoRank(req_meta.sender);
       }
       else {
         // there is push waiting, send responses immediately
         auto push_req_meta = worker_push_queue_[key].front();
+        worker_push_queue_[key].pop();
         // TODO: we only need sender, not the entire req_meta
         auto worker_cached = GetWorkerCache(key, push_req_meta.sender);
         SendPullResponse(type, key, worker_cached->tensor, worker_cached->len, req_meta, server);
-        worker_push_queue_[key].pop();
+        // PS_VLOG(1) << "immediately respond the pull from validator " << Postoffice::IDtoRank(req_meta.sender);
+        // PS_VLOG(1) << "pull by validator, send gradient from worker " << Postoffice::IDtoRank(push_req_meta.sender) << " to validator " << Postoffice::IDtoRank(req_meta.sender);
+        // print_array(worker_cached->tensor, bps_reducer_->GetDataType(worker_cached->dtype), "");
       }
     }
   }

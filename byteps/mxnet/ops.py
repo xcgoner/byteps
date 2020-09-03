@@ -144,3 +144,7 @@ def byteps_pull(tensor, version=0, priority=0, name=None):
 
 def byteps_declare_tensor(name):
     check_call(MXNET_LIB_CTYPES.byteps_mxnet_declare_tensor(c_str(name)))
+
+def byteps_declare_and_init_tensor(name, tensor):
+    c_in = tensor.handle
+    check_call(MXNET_LIB_CTYPES.byteps_mxnet_declare_and_init_tensor(c_str(name), c_in))

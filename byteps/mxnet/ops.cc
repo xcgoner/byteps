@@ -245,5 +245,24 @@ extern "C" void byteps_mxnet_declare_tensor(char* name) {
   return;
 }
 
+extern "C" void byteps_mxnet_declare_and_init_tensor(char* name, NDArray* tensor) {
+  std::string tensor_name = GetOpName("byteps", name);
+  common::IsTensorDeclared(tensor_name);
+  
+  // initialize tensor on server
+  auto tensor_copy = std::make_shared<NDArray>(*tensor);
+  auto& context = common::GetContextFromName(tensor_name);
+  auto dtype = TensorUtil::GetDType(tensor);
+  auto size = TensorUtil::GetSize(tensor);
+  auto device = TensorUtil::GetDevice(tensor);
+  void* cpubuff = (device == CPU_DEVICE_ID)
+                      ? const_cast<void*>(
+                            std::make_shared<MXTensor<NDArray>>(tensor_copy.get())->data())
+                      : nullptr;
+  common::InitTensor(context, size, dtype, cpubuff);
+
+  return;
+}
+
 }  // namespace mxnet
 }  // namespace byteps

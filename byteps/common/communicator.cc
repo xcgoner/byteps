@@ -79,6 +79,10 @@ void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
   *worker_size = num_worker;
   *validator_size = atoi(getenv("DMLC_NUM_VALIDATOR") ? getenv("DMLC_NUM_VALIDATOR") : 0);
 
+  // // debug
+  // std::cout << "DMLC_WORKER_ID=" << getenv("DMLC_WORKER_ID") << ", DMLC_VALIDATOR_ID=" << getenv("DMLC_VALIDATOR_ID") << std::endl;
+  // std::cout << "local_rank=" << *local_rank << ", worker_id=" << *worker_id << ", local_size=" << *local_size << std::endl;
+
   // we assume _local_size (i.e., # GPU) is consistent on all workers
   *rank = (*local_rank) + (*worker_id) * (*local_size);
   // force setting global rank

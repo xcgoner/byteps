@@ -125,7 +125,8 @@ struct pair_hash {
 };
 // worker-to-validator cache
 std::mutex worker_cache_mu_;
-std::unordered_map<std::pair<uint64_t, uint64_t>, BytePSArray, pair_hash> worker_cache_; 
+// std::unordered_map<std::pair<uint64_t, uint64_t>, BytePSArray, pair_hash> worker_cache_; 
+std::unordered_map<uint64_t, std::unordered_map<uint64_t, BytePSArray> > worker_cache_; 
 std::unordered_map<uint64_t, std::queue<ps::KVMeta > > validator_pull_queue_;
 std::unordered_map<uint64_t, std::queue<ps::KVMeta > > worker_push_queue_;
 
