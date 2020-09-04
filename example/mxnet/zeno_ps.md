@@ -5,9 +5,9 @@
 ## Setup
 
 ```
-pip3 uninstall mxnet-cu100 -y
-pip3 install --pre --upgrade 'mxnet-cu100==1.7.0b20200728' -f https://dist.mxnet.io/python --user
-pip3 install gluoncv
+pip uninstall mxnet-cu100 -y
+pip install --pre --upgrade 'mxnet-cu100==1.7.0b20200728' -f https://dist.mxnet.io/python --user
+pip install gluoncv
 pip uninstall byteps -y
 mkdir -p ~/src/zeno_ps
 cd ~/src/zeno_ps
@@ -360,5 +360,35 @@ python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/
 ### Synchronous experiments:
 
 ```
-python3 dist_launcher_zeno.py --worker-hostfile worker-hostfile --validator-hostfile validator-hostfile --server-hostfile server-hostfile --scheduler-ip 172.31.48.15 --scheduler-port 1234 --server-command "python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py" --worker-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_worker.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 16 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 16 --sparse-rate 0.2' --validator-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_validator.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 16 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 16'
+python3 dist_launcher_zeno.py --worker-hostfile worker-hostfile --validator-hostfile validator-hostfile --server-hostfile server-hostfile --scheduler-ip 172.31.48.15 --scheduler-port 1234 --server-command "python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py" --worker-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_worker.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 16 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 20 --sparse-rate 0.2' --validator-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_validator.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 16 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 20'
+```
+
+batch size 16
+
+```
+python3 dist_launcher_zeno.py --worker-hostfile worker-hostfile --validator-hostfile validator-hostfile --server-hostfile server-hostfile --scheduler-ip 127.0.0.1 --scheduler-port 1234 --server-command "python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py" --worker-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_worker.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 16 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 32 --sparse-rate 0.2' --validator-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_validator.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 16 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 32'
+```
+
+batch size 32
+```
+python3 dist_launcher_zeno.py --worker-hostfile worker-hostfile --validator-hostfile validator-hostfile --server-hostfile server-hostfile --scheduler-ip 127.0.0.1 --scheduler-port 1234 --server-command "python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py" --worker-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_worker.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 32 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 20 --sparse-rate 0.2' --validator-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_validator.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 32 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 20'
+```
+
+-------------------
+7 workers
+
+batch size 32
+
+sync
+
+non-byz
+
+average
+```
+python3 dist_launcher_zeno.py --worker-hostfile worker-hostfile --validator-hostfile validator-hostfile --server-hostfile server-hostfile --scheduler-ip 127.0.0.1 --scheduler-port 1234 --server-command "python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py" --worker-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_worker.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 32 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 32 --sparse-rate 0.2' --validator-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_validator.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 32 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 32'
+```
+
+trimmed_mean
+```
+python3 dist_launcher_zeno.py --worker-hostfile worker-hostfile --validator-hostfile validator-hostfile --server-hostfile server-hostfile --scheduler-ip 127.0.0.1 --scheduler-port 1234 --server-command "python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py" --worker-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_worker.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 32 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type average --sync-interval 32 --sparse-rate 0.2' --validator-command 'python3 /home/ubuntu/src/zeno_ps/byteps/launcher/launch.py python3 /home/ubuntu/src/zeno_ps/byteps/example/mxnet/train_cifar10_byteps_zeno_validator.py --num-epochs 200 --mode hybrid --num-gpus 1 -j 2 --batch-size 32 --wd 0.0001 --lr 0.1 --lr-decay 0.1 --lr-decay-epoch 100,150 --model cifar_resnet56_v1 --validation-type trimmed_mean --sync-interval 32'
 ```

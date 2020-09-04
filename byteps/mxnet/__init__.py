@@ -25,6 +25,8 @@ import time
 import random
 import math
 
+import numpy as np
+
 from byteps.mxnet.ops import byteps_push_pull, byteps_declare_tensor
 from byteps.mxnet.ops import init, shutdown, suspend, resume
 from byteps.mxnet.ops import size, local_size, rank, local_rank
@@ -368,14 +370,14 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
             self.sync_counter = 0
 
             mx.nd.waitall()
-            time.sleep(0.05 * (rank()+1))
+            time.sleep(0.1 * (rank()))
 
             # TODO: worker subsampling
             # tell the validator that this worker is going to send updates in this round
             self.worker_sparse_indicator[:] = rank() + 1
             byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
             mx.nd.waitall()
-            time.sleep(0.05 * (rank()+1))
+            time.sleep(0.1 * (rank()))
             for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
                 if param.grad_req != 'null':
                     param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
@@ -410,7 +412,8 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
                     cached_param_data[:] = param.list_data()[0]
             
             mx.nd.waitall()
-            time.sleep(0.05 * (rank()+1))
+            time.sleep(0.1 * (rank()))
+            # time.sleep(random.uniform(0,1))
 
 # training with validators
 class DistributedZenoValidatorSyncTrainer(mx.gluon.Trainer):
@@ -555,31 +558,38 @@ class DistributedZenoValidatorSyncTrainer(mx.gluon.Trainer):
             self.sync_counter = 0
 
             mx.nd.waitall()
-            # time.sleep(0.05 * (worker_size()+rank()+1))
-            time.sleep(0.05)
+            time.sleep(0.05 * (worker_size()+1))
+            # time.sleep(0.05)
 
-            # TODO: worker subsampling
             num_active_workers = 0
             active_workers = set()
             for j in range(worker_size()):
                 if j % validator_size() == rank():
                     byteps_pull(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
                     active_worker = self.worker_sparse_indicator[0].asscalar()
+                    if active_worker in active_workers:
+                        print("BytePS error active_worker")
+                        time.sleep(0.1 * (worker_size()+1))
                     # assert active_worker not in active_workers
                     active_workers.add(active_worker)
                     num_active_workers += (1 if active_worker > 0 else 0)
             
             mx.nd.waitall()
-            # time.sleep(0.05 * (worker_size()+rank()+1))
-            time.sleep(0.05)
+            time.sleep(0.05 * (worker_size()+1))
+            # time.sleep(0.05)
 
             for i, (param, cached_param_data, cached_update_list, send_layer, validator) \
                 in enumerate(zip(self._params, self.cached_params, self.cached_updates, self.block_sparse_indicators, self.validators)):
                 if param.grad_req != 'null':
                     active_layer_workers = set()
+                    sender_error_counter = -num_active_workers - 1
                     for k in range(num_active_workers):
                         byteps_pull(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
-                        active_layer_worker = send_layer[0].asscalar()
+                        active_layer_worker = np.asscalar(send_layer.asscalar())
+                        if active_layer_worker in active_layer_workers:
+                            print("BytePS error active_layer_worker")
+                            active_layer_worker = sender_error_counter
+                            sender_error_counter -= 1
                         # assert active_layer_worker not in active_layer_workers
                         active_layer_workers.add(active_layer_worker)
                         if k >= len(cached_update_list):
@@ -629,8 +639,8 @@ class DistributedZenoValidatorSyncTrainer(mx.gluon.Trainer):
                     cached_param_data[:] = param.list_data()[0]
             
             mx.nd.waitall()
-            # time.sleep(0.05 * (worker_size()+rank()+1))
-            time.sleep(0.05)
+            time.sleep(0.05 * (worker_size()+1))
+            # time.sleep(0.05)
                 
 
 # # Async

@@ -110,7 +110,7 @@ def submit(args):
         pass_envs['DMLC_ROLE'] = name
         prog = get_env(pass_envs) + args.server_command
         threads.append(start_ssh(prog, node, port, username, name))
-        time.sleep(1)
+        time.sleep(0.3)
     for i, (node, port, _) in enumerate(server_hosts):
         name = 'server'
         pass_envs['DMLC_ROLE'] = name
@@ -118,7 +118,7 @@ def submit(args):
             pass_envs['BYTEPS_ENABLE_ASYNC'] = 1
         prog = get_env(pass_envs) + args.server_command
         threads.append(start_ssh(prog, node, port, username, name + str(i)))
-        time.sleep(1)
+        time.sleep(0.3)
     for i, (node, port, gpu_id) in enumerate(worker_hosts):
         name = 'worker'
         pass_envs['DMLC_ROLE'] = "worker"
@@ -128,7 +128,7 @@ def submit(args):
             pass_envs['NVIDIA_VISIBLE_DEVICES'] = str(gpu_id)
         prog = get_env(pass_envs) + args.worker_command
         threads.append(start_ssh(prog, node, port, username, name + str(i)))
-        time.sleep(1)
+        time.sleep(0.3)
     del pass_envs['DMLC_WORKER_ID']
     for i, (node, port, gpu_id) in enumerate(validator_hosts):
         name = 'validator'
@@ -139,7 +139,7 @@ def submit(args):
             pass_envs['NVIDIA_VISIBLE_DEVICES'] = str(gpu_id)
         prog = get_env(pass_envs) + args.validator_command
         threads.append(start_ssh(prog, node, port, username, name + str(i)))
-        time.sleep(1)
+        time.sleep(0.3)
 
     for t in threads:
         t.join()
