@@ -22,6 +22,11 @@ python3 setup.py install --user
 Let's say you have 2 workers (1 GPU per worker), and one validator (1 GPU per worker). For simplicity we use one server. 
 Note that we put all the processes (server, scheduler, worker) in the same machine, and set BYTEPS_FORCE_DISTRIBUTED=1.
 
+The bug randomly happens.
+Sometimes in a single run of crossed_line.py, the bug does not happen.
+Note that when there is sufficient delay between server and worker (e.g., add some random sleep in crossed_line.py), the bug will be extremely rare. 
+Maybe that's why people do not observer it in multi-node settings.
+
 ------------
 
 ### Train with 2 workers:
