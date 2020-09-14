@@ -27,6 +27,8 @@ Sometimes in a single run of crossed_line.py, the bug does not happen.
 Note that when there is sufficient delay between server and worker (e.g., add some random sleep in crossed_line.py), the bug will be extremely rare. 
 Maybe that's why people do not observer it in multi-node settings.
 
+Also, to confirm that the bug is actually on the server side, turn on "PS_VERBOSE=1" for the server, and observe the actual value received in server.cc
+
 ------------
 
 ### Train with 2 workers:
