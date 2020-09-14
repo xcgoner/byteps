@@ -21,7 +21,7 @@ def main():
 
     tensor_1 = mx.nd.array([(-1) ** rank()], ctx=context)
 
-    byteps_declare_tensor("tensor_1", tensor_1)
+    byteps_declare_tensor("tensor_1")
 
     for i in range(1, 100):
 
