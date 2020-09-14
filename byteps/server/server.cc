@@ -17,6 +17,9 @@
 #include "../common/compressor/utils.h"
 #include "queue.h"
 
+#include <string>
+#include <sstream> 
+
 namespace byteps {
 namespace server {
 
@@ -25,6 +28,40 @@ using namespace ps;
 // engine related
 std::vector<PriorityQueue*> engine_queues_;
 std::vector<std::thread*> engine_threads_;
+
+template <typename T>
+void print_first_element(T* a) {
+  PS_VLOG(1) << "Array value: " << a[0];
+}
+
+void print_array(char* a, common::DataType dtype, const std::string& s) {
+  PS_VLOG(1) << "Array address: " << static_cast<void*>(a);
+  switch (dtype) {
+    case common::BYTEPS_FLOAT32:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<float*>(a));
+    case common::BYTEPS_FLOAT64:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<double*>(a));
+    case common::BYTEPS_FLOAT16:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<float*>(a));
+    case common::BYTEPS_UINT8:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<uint8_t*>(a));
+    case common::BYTEPS_INT32:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<int32_t*>(a));
+    case common::BYTEPS_INT8:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<int8_t*>(a));
+    case common::BYTEPS_INT64:
+      PS_VLOG(1) << s << "Array dtype: BYTEPS_FLOAT32" ;
+      return print_first_element(reinterpret_cast<int64_t*>(a));
+    default:
+      BPS_CHECK(0) << "Unsupported data type: " << dtype;
+  }
+}
 
 BytePSArray* GetStore(uint64_t key) {
   std::lock_guard<std::mutex> lock(store_mu_);
@@ -290,6 +327,14 @@ void BytePSHandler(const ps::KVMeta& req_meta,
     } else {
       auto& updates = update_buf_[key];
       auto tid = GetThreadID(key, len);
+
+      // debug
+      if (Postoffice::Get()->verbose() >= 1) {
+        std::stringstream ss;
+        ss << "push from worker " << req_meta.sender << ", ";
+        print_array(recved, bps_reducer_->GetDataType(type.dtype), ss.str());
+      }
+
       if (updates.request.empty()) {  // from the first incoming worker
         if (sync_mode_) {
           if (debug_mode_ && (debug_key_ == key)) {
