@@ -30,7 +30,7 @@ def main():
         mx.nd.waitall()
         print("worker %d after pushpull tensor_1=" % (rank()), tensor_1.asnumpy())
 
-        byteps_push(tensor_1, name="tensor_1", priority=-1)
+        byteps_push_pull(tensor_1, name="tensor_1", priority=-1)
 
         mx.nd.waitall()
         # sometimes the sum is not zero
