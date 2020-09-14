@@ -22,10 +22,11 @@ python3 setup.py install --user
 Let's say you have 2 workers (1 GPU per worker), and one validator (1 GPU per worker). For simplicity we use one server. 
 Note that we put all the processes (server, scheduler, worker) in the same machine, and set BYTEPS_FORCE_DISTRIBUTED=1.
 
+When the bug happens, the server receives the same value from different workers (looks like the 2 workers has crossed lines), while the received values should be different.
 The bug randomly happens.
 Sometimes in a single run of crossed_line.py, the bug does not happen.
 Note that when there is sufficient delay between server and worker (e.g., add some random sleep in crossed_line.py), the bug will be extremely rare. 
-Maybe that's why people do not observer it in multi-node settings.
+Maybe that's why people do not observe it in multi-node settings.
 
 Also, to confirm that the bug is actually on the server side, turn on "PS_VERBOSE=1" for the server, and observe the actual value received in server.cc
 
