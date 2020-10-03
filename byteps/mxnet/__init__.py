@@ -35,7 +35,7 @@ from byteps.mxnet.ops import size, local_size, rank, local_rank
 from byteps.mxnet.ops import worker_size, validator_size
 from byteps.mxnet.ops import byteps_push, byteps_pull, byteps_declare_and_init_tensor
 
-from byteps.mxnet.validator import NaiveValidator, TrimmedMeanValidator, PhocasValidator, ZenoValidator, ZenoppValidator, NaiveAsyncValidator
+from byteps.mxnet.validator import NaiveValidator, TrimmedMeanValidator, PhocasValidator, ZenoValidator, ZenoppValidator, NaiveAsyncValidator, FedAsyncValidator
 from byteps.mxnet.attacks import RandomAttack, NegativeAttack
 
 parameter_index = 0
@@ -370,14 +370,14 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
             self.sync_counter = 0
 
             mx.nd.waitall()
-            time.sleep(0.1 * (rank()))
+            time.sleep(0.05 * (rank()))
 
             # TODO: worker subsampling
             # tell the validator that this worker is going to send updates in this round
             self.worker_sparse_indicator[:] = rank() + 1
             byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
             mx.nd.waitall()
-            time.sleep(0.1 * (rank()))
+            time.sleep(0.05 * (rank()))
             for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
                 if param.grad_req != 'null':
                     param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
@@ -412,7 +412,7 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
                     cached_param_data[:] = param.list_data()[0]
             
             mx.nd.waitall()
-            time.sleep(0.1 * (rank()))
+            time.sleep(0.05 * (rank()))
             # time.sleep(random.uniform(0,1))
 
 # training with validators
@@ -502,7 +502,7 @@ class DistributedZenoValidatorSyncTrainer(mx.gluon.Trainer):
                     num_trimmed = int(max(1, worker_size()*0.2))
                     self.validators.append(PhocasValidator(num_trimmed=num_trimmed))
                 elif self.validation_type == "zeno":
-                    self.validators.append(ZenoValidator(eta=0.01, rho=0.5))
+                    self.validators.append(ZenoValidator(eta=-0.001, rho=0.6))
                 else:
                     raise ValueError('Undefined validation_type: %s' % self.validation_type)
             else:
@@ -792,14 +792,15 @@ class DistributedZenoWorkerAsyncTrainer(mx.gluon.Trainer):
             self.sync_counter = 0
 
             mx.nd.waitall()
-            time.sleep(0.15 * (rank()+1))
+            # add some random delay to simulate asynchrony
+            time.sleep(1.0 * worker_size() * random.uniform(0, 1))
 
             # TODO: worker subsampling
             # tell the validator that this worker is going to send updates in this round
             self.worker_sparse_indicator[:] = rank() + 1
             byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
             mx.nd.waitall()
-            time.sleep(0.15 * (rank()+1))
+            time.sleep(0.001 * worker_size() * random.uniform(0, 1))
             for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
                 if param.grad_req != 'null':
                     param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
@@ -826,9 +827,12 @@ class DistributedZenoWorkerAsyncTrainer(mx.gluon.Trainer):
                         byteps_push(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
             
             while self.global_timestamp.asscalar() <= self.local_timestamp.asscalar():
-                time.sleep(0.1)
+                time.sleep(0.01)
                 byteps_pull(self.global_timestamp, name="global_timestamp", priority=0)
             self.local_timestamp[:] = self.global_timestamp
+
+            mx.nd.waitall()
+            time.sleep(0.005 * worker_size())
             
             for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
                 if param.grad_req != 'null':
@@ -838,7 +842,7 @@ class DistributedZenoWorkerAsyncTrainer(mx.gluon.Trainer):
                     cached_param_data[:] = param.list_data()[0]
             
             mx.nd.waitall()
-            time.sleep(0.15 * (rank()+1))
+            time.sleep(0.001 * worker_size() * random.uniform(0, 1))
 
 # async validation
 class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
@@ -924,9 +928,16 @@ class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
                 self.cached_updates.append(param.list_grad()[0].copy())
 
                 if self.validation_type == "zenopp":
-                    self.validators.append(ZenoppValidator(eta=0.01, rho=0.5, alpha=math.sqrt(1./worker_size())))
+                    self.validators.append(ZenoppValidator(eta=-0.01, rho=0.6, alpha=0.2))
+                    # self.validators.append(ZenoppValidator(eta=-0.01, rho=0.6, alpha=math.sqrt(1./worker_size())))
+                    # self.validators.append(ZenoppValidator(eta=-0.001, rho=0.4, alpha=1./worker_size()))
                 elif self.validation_type == "naive_async":
-                    self.validators.append(NaiveAsyncValidator(alpha=math.sqrt(1./worker_size())))
+                    # self.validators.append(NaiveAsyncValidator(alpha=math.sqrt(1./worker_size())))
+                    # self.validators.append(NaiveAsyncValidator(alpha=1./worker_size()))
+                    self.validators.append(NaiveAsyncValidator(alpha=0.2))
+                elif self.validation_type == "fed_async":
+                    self.validators.append(FedAsyncValidator(alpha=math.sqrt(1./worker_size())))
+                    # self.validators.append(FedAsyncValidator(alpha=1./worker_size()))
                 else:
                     raise ValueError('Undefined validation_type: %s' % self.validation_type)
             else:
@@ -1011,7 +1022,7 @@ class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
                     param.list_data()[0][:] = cached_param_data
 
             mx.nd.waitall()
-            time.sleep(0.05 * (worker_size()+rank()+1))
+            # time.sleep(0.01 * (worker_size()+rank()+1))
 
             # TODO: worker subsampling
             for j in range(worker_size()):
@@ -1019,6 +1030,7 @@ class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
                     byteps_pull(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
                     active_worker = self.worker_sparse_indicator[0].asscalar()
                     mx.nd.waitall()
+                    # time.sleep(1.0 * random.uniform(0, 1))
                     if active_worker > 0:
 
                         for i, (param, cached_param_data, cached_update_data, send_layer, validator) \
@@ -1049,7 +1061,7 @@ class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
                         byteps_push(self.global_timestamp, priority=-1, name="global_timestamp")
             
                         mx.nd.waitall()
-                        time.sleep(0.05)
+                        time.sleep(0.01)
             
             for i, (param, cached_param_data) \
                 in enumerate(zip(self._params, self.cached_params)):
@@ -1057,4 +1069,4 @@ class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
                     byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
                     cached_param_data[:] = param.list_data()[0]
             mx.nd.waitall()
-            time.sleep(0.01)
+            # time.sleep(0.01)

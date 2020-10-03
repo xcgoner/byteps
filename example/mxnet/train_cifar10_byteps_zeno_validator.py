@@ -19,6 +19,7 @@ import logging
 import subprocess
 import time
 import os
+import math
 import numpy as np
 
 import gluoncv as gcv
@@ -92,6 +93,8 @@ def parse_args():
                         help='number of local steps.')
     parser.add_argument('--validation-type', type=str, default='average',
                         help='method for validator')
+    parser.add_argument('--alpha-decay', type=float, default=0.5,
+                        help='decay rate of the mixing parameter. default is 0.1.')
     opt = parser.parse_args()
     return opt
 
@@ -223,10 +226,12 @@ def main():
                                             validation_type = opt.validation_type, 
                                             sync_interval = opt.sync_interval)
         else:
+            optimizer_params['learning_rate'] *= math.sqrt(1./(worker_size()+1))
+            # optimizer_params['learning_rate'] /= (worker_size()+1)
             trainer = bps.DistributedZenoValidatorAsyncTrainer(params,
                                             opt.optimizer,
                                             optimizer_params, 
-                                            rho = 0.1, 
+                                            rho = 0.2, 
                                             validation_type = opt.validation_type, 
                                             sync_interval = opt.sync_interval)
         metric = mx.metric.Accuracy()
@@ -244,9 +249,22 @@ def main():
             train_loss = 0
             num_batch = len(val_data)
 
+            # if epoch == lr_decay_epoch[lr_decay_count]:
+            #     if opt.sync_mode == "sync":
+            #         trainer.set_learning_rate(trainer.learning_rate*lr_decay)
+            #         lr_decay_count += 1
+            #     elif opt.sync_mode == "async":
+            #         for validator in trainer.validators:
+            #             if validator:
+            #                 validator.alpha *= lr_decay
+
             if epoch == lr_decay_epoch[lr_decay_count]:
                 trainer.set_learning_rate(trainer.learning_rate*lr_decay)
                 lr_decay_count += 1
+                if opt.sync_mode == "async":
+                    for validator in trainer.validators:
+                        if validator:
+                            validator.alpha *= opt.alpha_decay
 
             for i, batch in enumerate(val_data):
                 # if first_batch or opt.validation_type == "zeno++":

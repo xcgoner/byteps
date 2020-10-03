@@ -19,6 +19,7 @@ import logging
 import subprocess
 import time
 import os
+import math
 import numpy as np
 
 import gluoncv as gcv
@@ -237,10 +238,12 @@ def main():
                                             sparse_rate = opt.sparse_rate, 
                                             attack_params = attack_params)
         else:
+            optimizer_params['learning_rate'] *= math.sqrt(1./(worker_size()+1))
+            # optimizer_params['learning_rate'] /= (worker_size()+1)
             trainer = bps.DistributedZenoWorkerAsyncTrainer(params,
                                             opt.optimizer,
                                             optimizer_params, 
-                                            rho = 0.1, 
+                                            rho = 0.2, 
                                             sync_interval = opt.sync_interval, 
                                             sparse_rate = opt.sparse_rate, 
                                             attack_params = attack_params)
@@ -259,6 +262,9 @@ def main():
             train_loss = 0
             num_batch = len(train_data)
 
+            # if epoch == lr_decay_epoch[lr_decay_count] and opt.sync_mode == "sync":
+            #     trainer.set_learning_rate(trainer.learning_rate*lr_decay)
+            #     lr_decay_count += 1
             if epoch == lr_decay_epoch[lr_decay_count]:
                 trainer.set_learning_rate(trainer.learning_rate*lr_decay)
                 lr_decay_count += 1

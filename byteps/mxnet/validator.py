@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import os
 import numpy as np
+import math
 
 import mxnet as mx
 
@@ -106,7 +107,8 @@ class ZenoValidator(Validator):
                     result[:] += u
                 counter += 1
         if counter > 0:
-            result /= validation_info['num_tensors']
+            # result /= validation_info['num_tensors']
+            result /= counter
         else:
             result[:] = 0
         return counter
@@ -124,7 +126,8 @@ class ZenoppValidator(Validator):
         b = validation_info['validation_tensor'].square().mean().asscalar()
         c = update.square().mean().asscalar()
         if a > b * self.eta and c < b * (1 + self.rho):
-            result[:] = update * (self.alpha / (1 + c))
+            # result[:] = update * (self.alpha / 0.5 * (1 + math.exp(- 5 * a / math.sqrt(b) / math.sqrt(c))) )
+            result[:] = update * self.alpha
             return 1
         else:
             result[:] = 0
@@ -137,7 +140,22 @@ class NaiveAsyncValidator(Validator):
     def validate(self, update, result, validation_info = None):
         # update sould be single tensor
         # validation_info contains the validation tensor
+        # add some dummy computation, so that the delay on the validator won't affect the overall latency and asynchrony, which makes it fair for zeno
+        a = (update * update).mean().asscalar()
+        b = update.square().mean().asscalar()
+        c = update.square().mean().asscalar()
         result[:] = update * self.alpha
+
+class FedAsyncValidator(Validator):
+    def __init__(self, alpha = 0.8):
+        self.alpha = alpha
+    # implement simple average
+    def validate(self, update, result, validation_info = None):
+        # update sould be single tensor
+        # validation_info contains the validation tensor
+        c = update.square().mean().asscalar()
+        # result[:] = update * self.alpha
+        result[:] = update * (self.alpha / (1 + c))
         
 
 
