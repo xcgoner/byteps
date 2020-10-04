@@ -103,6 +103,8 @@ def parse_args():
     # communication compression
     parser.add_argument('--sparse-rate', type=float, default=0.0,
                         help='rate for sparse communication. default is 0.')
+    parser.add_argument('--worker-subsample-rate', type=float, default=1.0,
+                        help='rate for worker subsampling. default is 1.0')
     opt = parser.parse_args()
     return opt
 
@@ -235,6 +237,7 @@ def main():
                                             opt.optimizer,
                                             optimizer_params, 
                                             sync_interval = opt.sync_interval, 
+                                            worker_subsample_rate = opt.worker_subsample_rate,
                                             sparse_rate = opt.sparse_rate, 
                                             attack_params = attack_params)
         else:

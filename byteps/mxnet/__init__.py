@@ -270,7 +270,7 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
         constructor for a list of additional supported arguments.
     """
 
-    def __init__(self, params, optimizer, optimizer_params=None, sync_interval=1, sparse_rate=0.0, attack_params=None):
+    def __init__(self, params, optimizer, optimizer_params=None, sync_interval=1, worker_subsample_rate=1.0, sparse_rate=0.0, attack_params=None):
         if isinstance(optimizer, DistributedOptimizer):
             optimizer = optimizer._optimizer
             warnings.warn("DistributedZenoWorkerSyncTrainer does not take DistributedOptimizer "
@@ -287,6 +287,7 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
         self.sync_interval = sync_interval
         self.sync_counter = 0
 
+        self.worker_subsample_rate = worker_subsample_rate
         self.sparse_rate = sparse_rate
 
         self.zenops_initialized = False
@@ -374,42 +375,46 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
 
             # TODO: worker subsampling
             # tell the validator that this worker is going to send updates in this round
-            self.worker_sparse_indicator[:] = rank() + 1
-            byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
-            mx.nd.waitall()
-            time.sleep(0.05 * (rank()))
-            for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
-                if param.grad_req != 'null':
-                    param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
+            if random.uniform(0, 1) <= self.worker_subsample_rate:
+                self.worker_sparse_indicator[:] = rank() + 1
+                byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
+                mx.nd.waitall()
+                time.sleep(0.05 * (rank()))
+                for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                    if param.grad_req != 'null':
+                        param.list_grad()[0][:] = param.list_data()[0] - cached_param_data
 
-                    # TODO: layer sparsification
-                    # tell the validator that this worker is going to send updates in this round
-                    send_layer[:] = rank() + 1
-                    if random.uniform(0, 1) < self.sparse_rate:
-                        # skip communication
-                        send_layer[:] *= (-1)
+                        # TODO: layer sparsification
+                        # tell the validator that this worker is going to send updates in this round
+                        send_layer[:] = rank() + 1
+                        if random.uniform(0, 1) < self.sparse_rate:
+                            # skip communication
+                            send_layer[:] *= (-1)
 
-                        byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+                            byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
 
-                        # error reset
-                        cached_param_data[:] = param.list_grad()[0]
+                            # error reset
+                            cached_param_data[:] = param.list_grad()[0]
 
-                    else:
-                        cached_param_data[:] = 0
-                        byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
+                        else:
+                            cached_param_data[:] = 0
+                            byteps_push(send_layer, name="block_sparse_indicator_" + str(i), priority=-i)
 
-                        if self.attacker and self.byz_rate and random.uniform(0, 1) < self.byz_rate:
-                            self.attacker.attack(param.list_grad()[0])
+                            if self.attacker and self.byz_rate and random.uniform(0, 1) < self.byz_rate:
+                                self.attacker.attack(param.list_grad()[0])
 
-                        byteps_push(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
-                    
-            
-            for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
-                if param.grad_req != 'null':
-                    param.list_data()[0][:] = 0
-                    byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
-                    param.list_data()[0][:] += cached_param_data
-                    cached_param_data[:] = param.list_data()[0]
+                            byteps_push(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
+                        
+                
+                for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                    if param.grad_req != 'null':
+                        param.list_data()[0][:] = 0
+                        byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+                        param.list_data()[0][:] += cached_param_data
+                        cached_param_data[:] = param.list_data()[0]
+            else:
+                self.worker_sparse_indicator[:] = -rank() - 1
+                byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
             
             mx.nd.waitall()
             time.sleep(0.05 * (rank()))
