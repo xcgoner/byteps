@@ -938,7 +938,7 @@ class DistributedZenoValidatorAsyncTrainer(mx.gluon.Trainer):
                 self.cached_updates.append(param.list_grad()[0].copy())
 
                 if self.validation_type == "zenopp":
-                    self.validators.append(ZenoppValidator(eta=-0.01, rho=0.6, alpha=0.2))
+                    self.validators.append(ZenoppValidator(eta=-0.1, rho=0.6, alpha=0.2))
                     # self.validators.append(ZenoppValidator(eta=-0.01, rho=0.6, alpha=math.sqrt(1./worker_size())))
                     # self.validators.append(ZenoppValidator(eta=-0.001, rho=0.4, alpha=1./worker_size()))
                 elif self.validation_type == "naive_async":
