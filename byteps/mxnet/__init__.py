@@ -405,16 +405,21 @@ class DistributedZenoWorkerSyncTrainer(mx.gluon.Trainer):
 
                             byteps_push(param.list_grad()[0], name="gradient_" + str(i), priority=-i)
                         
-                
-                for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
-                    if param.grad_req != 'null':
-                        param.list_data()[0][:] = 0
-                        byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
-                        param.list_data()[0][:] += cached_param_data
-                        cached_param_data[:] = param.list_data()[0]
             else:
                 self.worker_sparse_indicator[:] = -rank() - 1
                 byteps_push(self.worker_sparse_indicator, name="worker_sparse_indicator", priority=0)
+
+                for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                    if param.grad_req != 'null':
+                        # error reset
+                        cached_param_data[:] = param.list_data()[0] - cached_param_data
+            
+            for i, (param, cached_param_data, send_layer) in enumerate(zip(self._params, self.cached_params, self.block_sparse_indicators)):
+                if param.grad_req != 'null':
+                    param.list_data()[0][:] = 0
+                    byteps_pull(param.list_data()[0], name="parameter_" + str(i), priority=-i)
+                    param.list_data()[0][:] += cached_param_data
+                    cached_param_data[:] = param.list_data()[0]
             
             mx.nd.waitall()
             time.sleep(0.05 * (rank()))
