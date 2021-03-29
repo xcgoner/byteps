@@ -14,7 +14,9 @@
 // =============================================================================
 
 #include "operations.h"
+#if HAVE_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -46,6 +48,7 @@ void byteps_lazy_init() {
     }
   }
 
+  #if HAVE_CUDA
   // Cross-PCIe-switch reduce
   if (BytePSGlobal::IsCrossPcieSwitch()) {
     func.push_back(PcieReduceLoop);
@@ -75,6 +78,13 @@ void byteps_lazy_init() {
     func.push_back(CoordinateBroadcastLoop);
     func.push_back(NonRootNcclLoop);
   }
+  #else
+  if (BytePSGlobal::IsDistributed()) {
+    if (BytePSGlobal::IsRootDevice()) {
+      func.push_back(PushLoop);
+    }
+  }
+  #endif
 
   BytePSGlobal::Start(func);
   return;
@@ -191,6 +201,7 @@ Status EnqueueTensor(BPSContext &context, std::shared_ptr<Tensor> input,
   e->version = version;
   e->callback = callback;
 
+  #if HAVE_CUDA
   if (device == CPU_DEVICE_ID) {
     cudaError_t err = cudaHostRegister(const_cast<void*>(input->data()), input->size(), cudaHostRegisterMapped);
     if (err == cudaSuccess) {
@@ -198,6 +209,8 @@ Status EnqueueTensor(BPSContext &context, std::shared_ptr<Tensor> input,
     }
     CUDA_CALL(cudaHostGetDevicePointer(&(context.gpu_ptr), const_cast<void*>(input->data()), 0));
   }
+  #endif
+  
 
   e->cpubuff = context.cpubuff;
   e->gpu_ptr = context.gpu_ptr;
@@ -259,7 +272,9 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
   if (context.initialized) {
     return;
   }
+  #if HAVE_CUDA
   CUDA_CALL(cudaSetDevice(BytePSGlobal::GetLocalRank()));
+  #endif
 
   BPS_CHECK_GT(size, 0) << "init tensor size not larger than 0";
   // Get metadata
@@ -304,6 +319,7 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
 
   // If cpubuff is not nullptr, the tensor itself is on CPU
   // We need to register with CUDA so that NCCL can work on it
+  #if HAVE_CUDA
   if (cpubuff) {
     BPS_LOG(DEBUG) << name << " is already on cpu, len=" << size;
     cudaError_t e = cudaHostRegister(cpubuff, size, cudaHostRegisterMapped);
@@ -313,10 +329,13 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
     }
     CUDA_CALL(cudaHostGetDevicePointer(&(context.gpu_ptr), cpubuff, 0));
   }
+  #endif
+  
 
   // We always allocate our own cpu buffer
   // use the first key in key_list as the index
   auto shm_obj = BytePSGlobal::GetSharedMemoryObj();
+  #if HAVE_CUDA
   if (BytePSGlobal::IsCrossPcieSwitch()) {
     context.pcie_cpubuff = shm_obj->openPcieSharedMemory(key_list[0], size);
     context.cpubuff = context.pcie_cpubuff.back();
@@ -324,6 +343,12 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
     context.cpubuff = shm_obj->openSharedMemory(std::string("BytePS_ShM_"),
                                                 key_list[0], size);
   }
+  #else
+  // context.cpubuff = shm_obj->openSharedMemory(std::string("BytePS_ShM_"),
+  //                                             key_list[0], size);
+  context.cpubuff = cpubuff;
+  #endif
+  
   BPS_LOG(TRACE) << name << ": open shared memory size " << size;
 
   // Init tensors with BytePS server
@@ -369,7 +394,8 @@ bool IsTensorDeclared(const std::string &name) {
 
 std::shared_ptr<std::vector<QueueType>> GetPushQueueList(int device) {
   auto queue_list = std::make_shared<std::vector<QueueType>>();
-
+  
+  #if HAVE_CUDA
   // Per-PCIe-switch NCCL reduce
   if (BytePSGlobal::GetNccl()->IsSignalRoot()) {
     queue_list->push_back(REDUCE);
@@ -377,7 +403,7 @@ std::shared_ptr<std::vector<QueueType>> GetPushQueueList(int device) {
     queue_list->push_back(COORDINATE_REDUCE);
     queue_list->push_back(REDUCE);
   }
-
+  
   // Copy from GPU to CPU
   if (BytePSGlobal::IsDistributed() || BytePSGlobal::IsCrossPcieSwitch()) {
     queue_list->push_back(COPYD2H);
@@ -387,6 +413,8 @@ std::shared_ptr<std::vector<QueueType>> GetPushQueueList(int device) {
   if (BytePSGlobal::IsCrossPcieSwitch()) {
     queue_list->push_back(PCIE_REDUCE);
   }
+  #endif
+  
 
   // Push in distributed mode
   // In case IsCrossPcieSwitch(), PUSH runs as a dummy barrier
@@ -410,6 +438,7 @@ std::shared_ptr<std::vector<QueueType>> GetPullQueueList(int device) {
     }
   }
 
+  #if HAVE_CUDA
   // Copy from CPU to GPU
   if (BytePSGlobal::IsDistributed() || BytePSGlobal::IsCrossPcieSwitch()) {
     queue_list->push_back(COPYH2D);
@@ -422,6 +451,9 @@ std::shared_ptr<std::vector<QueueType>> GetPullQueueList(int device) {
     queue_list->push_back(COORDINATE_BROADCAST);
     queue_list->push_back(BROADCAST);
   }
+  #endif
+
+  
   return queue_list;
 }
 

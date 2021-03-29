@@ -17,7 +17,9 @@
 #define BYTEPS_COMMUNICATOR_H
 
 #include <errno.h>
+#if HAVE_CUDA
 #include <nccl.h>
+#endif
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -62,7 +64,7 @@ class BytePSComm {
   BytePSComm() { _comm = nullptr; }
 
   virtual void init(int* rank, int* size, int* local_rank, int* local_size,
-                    int* worker_id, BytePSRole* my_role, int* worker_size, int* validator_size) = 0;
+                    int* worker_id, bool* is_validator, BytePSRole* my_role, int* worker_size, int* validator_size) = 0;
   virtual int sendSignal(int destination, void* data, int len) = 0;
   virtual int sendSignalToRoot(void* data, int len) = 0;
   virtual int recvSignal(int* source, void* data, int max_len) = 0;
@@ -74,6 +76,7 @@ class BytePSComm {
   virtual int getLocalRank() { return _local_rank; }
   virtual int getLocalSize() { return _local_size; }
   virtual int getWorkerID() { return _worker_id; }
+  virtual bool isValidator() { return _is_validator; }
 
   virtual std::vector<int> getMembers() { return _members; }
   virtual int getRoot() { return _root; }
@@ -84,6 +87,7 @@ class BytePSComm {
   int _local_rank;
   int _local_size;
   int _worker_id;
+  bool _is_validator;
 
   std::vector<int> _members;
   int _root;
@@ -119,7 +123,7 @@ class BytePSCommSocket : public BytePSComm {
   }
 
   void init(int* rank, int* size, int* local_rank, int* local_size,
-            int* worker_id, BytePSRole* my_role, int* worker_size, int* validator_size);
+            int* worker_id, bool* is_validator, BytePSRole* my_role, int* worker_size, int* validator_size);
   int sendSignal(int destination, void* data, int len);
   int sendSignalToRoot(void* data, int len);
   int recvSignal(int* source, void* data, int max_len);

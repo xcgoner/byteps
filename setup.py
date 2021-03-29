@@ -263,9 +263,16 @@ def has_rdma_header():
         warnings.warn("\n\n No RDMA header file detected. Will disable RDMA for compilation! \n\n")
     return ret_code==0
 
+def enabled_cuda():
+    disable_cuda = os.environ.get('BYTEPS_DISABLE_CUDA')
+    if disable_cuda: return False
+    return True
+
 def get_common_options(build_ext):
     cpp_flags = get_cpp_flags(build_ext)
     link_flags = get_link_flags(build_ext)
+
+    have_cuda = enabled_cuda()
 
     MACROS = [('EIGEN_MPL2_ONLY', 1)]
     INCLUDES = ['3rdparty/ps-lite/include']
@@ -278,8 +285,8 @@ def get_common_options(build_ext):
                'byteps/common/scheduled_queue.cc',
                'byteps/common/ready_table.cc',
                'byteps/common/shared_memory.cc',
-               'byteps/common/nccl_manager.cc',
                'byteps/common/cpu_reducer.cc']
+    if have_cuda: SOURCES += ['byteps/common/nccl_manager.cc']
     if "BYTEPS_USE_MPI" in os.environ and os.environ["BYTEPS_USE_MPI"] == "1":
         mpi_flags = get_mpi_flags()
         COMPILE_FLAGS = cpp_flags + \
@@ -291,10 +298,11 @@ def get_common_options(build_ext):
     LIBRARY_DIRS = []
     LIBRARIES = []
 
-    nccl_include_dirs, nccl_lib_dirs, nccl_libs = get_nccl_vals()
-    INCLUDES += nccl_include_dirs
-    LIBRARY_DIRS += nccl_lib_dirs
-    LIBRARIES += nccl_libs
+    if have_cuda:
+        nccl_include_dirs, nccl_lib_dirs, nccl_libs = get_nccl_vals()
+        INCLUDES += nccl_include_dirs
+        LIBRARY_DIRS += nccl_lib_dirs
+        LIBRARIES += nccl_libs
 
     # RDMA and NUMA libs
     LIBRARIES += ['numa']
@@ -588,7 +596,6 @@ def is_mx_cuda():
                 return False
     return False
 
-
 def get_cuda_dirs(build_ext, cpp_flags):
     cuda_include_dirs = []
     cuda_lib_dirs = []
@@ -687,21 +694,23 @@ def build_mx_extension(build_ext, options):
     mx_compile_flags, mx_link_flags = get_mx_flags(
         build_ext, options['COMPILE_FLAGS'])
 
-    mx_have_cuda = is_mx_cuda()
-    macro_have_cuda = check_macro(options['MACROS'], 'HAVE_CUDA')
-    if not mx_have_cuda and macro_have_cuda:
-        raise DistutilsPlatformError(
-            'BytePS build with GPU support was requested, but this MXNet '
-            'installation does not support CUDA.')
+    have_cuda = enabled_cuda()
+    if have_cuda:
+        mx_have_cuda = is_mx_cuda()
+        macro_have_cuda = check_macro(options['MACROS'], 'HAVE_CUDA')
+        if not mx_have_cuda and macro_have_cuda:
+            raise DistutilsPlatformError(
+                'BytePS build with GPU support was requested, but this MXNet '
+                'installation does not support CUDA.')
 
-    # Update HAVE_CUDA to mean that MXNet supports CUDA.
-    if mx_have_cuda and not macro_have_cuda:
-        cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(
-            build_ext, options['COMPILE_FLAGS'])
-        options['MACROS'] += [('HAVE_CUDA', '1')]
-        options['INCLUDES'] += cuda_include_dirs
-        options['LIBRARY_DIRS'] += cuda_lib_dirs
-        options['LIBRARIES'] += ['cudart']
+        # Update HAVE_CUDA to mean that MXNet supports CUDA.
+        if mx_have_cuda and not macro_have_cuda:
+            cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(
+                build_ext, options['COMPILE_FLAGS'])
+            options['MACROS'] += [('HAVE_CUDA', '1')]
+            options['INCLUDES'] += cuda_include_dirs
+            options['LIBRARY_DIRS'] += cuda_lib_dirs
+            options['LIBRARIES'] += ['cudart']
 
     mxnet_lib.define_macros = options['MACROS']
     if check_macro(options['MACROS'], 'HAVE_CUDA'):
@@ -721,8 +730,8 @@ def build_mx_extension(build_ext, options):
         ['byteps/mxnet/ops.cc',
          'byteps/mxnet/ready_event.cc',
          'byteps/mxnet/tensor_util.cc',
-         'byteps/mxnet/cuda_util.cc',
          'byteps/mxnet/adapter.cc']
+    if have_cuda: mxnet_lib.sources += ['byteps/mxnet/cuda_util.cc']
     mxnet_lib.extra_compile_args = options['COMPILE_FLAGS'] + \
         mx_compile_flags
     mxnet_lib.extra_link_args = options['LINK_FLAGS'] + mx_link_flags

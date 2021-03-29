@@ -29,16 +29,27 @@ void* BytePSSharedMemory::openSharedMemory(const std::string& prefix,
                                            uint64_t key, size_t size) {
   size = BytePSGlobal::RoundUpToPageSize(size);
   std::string shm_name(prefix);
+  shm_name += std::to_string(BytePSGlobal::IsValidator());
+  shm_name += "_";
   shm_name += std::to_string(BytePSGlobal::GetRank());
   shm_name += "_";
   shm_name += std::to_string(key);
+
+  BPS_LOG(DEBUG) << "rank: " << BytePSGlobal::GetRank()
+                 << ", local rank: " << BytePSGlobal::GetLocalRank()
+                 << ", worker id: " << BytePSGlobal::GetWorkerID()
+                 << ", is validator: " << BytePSGlobal::IsValidator()
+                 << ", open shared memory: " << shm_name;
+
   int shm_fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   BPS_CHECK_GE(shm_fd, 0) << "shm_open failed for " << shm_name;
 
   BPS_CHECK_GE(ftruncate(shm_fd, size), 0) << strerror(errno);
 
   void* ptr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  #if HAVE_CUDA
   CUDA_CALL(cudaHostRegister(ptr, size, cudaHostRegisterDefault));
+  #endif
   // mlock(ptr, size);
 
   BPS_CHECK_NE(ptr, (void*)-1) << strerror(errno);
@@ -51,6 +62,7 @@ void* BytePSSharedMemory::openSharedMemory(const std::string& prefix,
   return ptr;
 }
 
+#if HAVE_CUDA
 std::vector<void*> BytePSSharedMemory::openPcieSharedMemory(uint64_t key,
                                                             size_t size) {
   std::vector<void*> r;
@@ -82,6 +94,7 @@ std::vector<void*> BytePSSharedMemory::openPcieSharedMemory(uint64_t key,
   }
   return r;
 }
+#endif
 
 }  // namespace common
 

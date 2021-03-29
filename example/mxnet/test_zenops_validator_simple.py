@@ -35,9 +35,9 @@ def main():
     # context = mx.gpu(ctx_idx)
     context = mx.cpu()
 
-    gradient_1 = mx.nd.array([(-1) ** rank()], ctx=context)
-    gradient_2 = mx.nd.array([(-10) ** rank()], ctx=context)
-    parameter = mx.nd.array([1], ctx=context)
+    gradient_1 = mx.nd.array([(-1) ** rank()] * 2, ctx=context)
+    gradient_2 = mx.nd.array([(-10) ** rank()] * 2, ctx=context)
+    parameter = mx.nd.array([1] * 2, ctx=context)
 
     byteps_declare_and_init_tensor("gradient_1", gradient_1)
     byteps_declare_and_init_tensor("gradient_2", gradient_2)
@@ -48,12 +48,18 @@ def main():
     if rank() == 0:
         parameter[:] = -1
     else:
-        parameter[:] = 0
-    byteps_push(parameter, name="parameter", priority=0)
-    byteps_pull(parameter, name="parameter", priority=0)
-
+        parameter[:] = 1
+    
     mx.nd.waitall()
     print("validator %d has parameter=" % (rank()), parameter.asnumpy())
+    
+    byteps_push(parameter, name="parameter", priority=0)
+    mx.nd.waitall()
+    print("validator %d pushed parameter=" % (rank()), parameter.asnumpy())
+    
+    byteps_pull(parameter, name="parameter", priority=0)
+    mx.nd.waitall()
+    print("validator %d pulled parameter=" % (rank()), parameter.asnumpy())
 
     for i in range(20):
 

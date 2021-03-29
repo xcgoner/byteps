@@ -35,19 +35,21 @@ def main():
     context = mx.cpu()
 
     # gradient = mx.nd.array([rank()])
-    gradient_1 = mx.nd.array([(-1) ** rank()], ctx=context)
-    gradient_2 = mx.nd.array([(-10) ** rank()], ctx=context)
-    parameter = mx.nd.array([1], ctx=context)
+    gradient_1 = mx.nd.array([(-1) ** rank()] * 2, ctx=context)
+    gradient_2 = mx.nd.array([(-10) ** rank()] * 2, ctx=context)
+    parameter = mx.nd.array([0] * 2, ctx=context)
 
     byteps_declare_and_init_tensor("gradient_1", gradient_1)
     byteps_declare_and_init_tensor("gradient_2", gradient_2)
     byteps_declare_and_init_tensor("parameter", parameter)
 
-    byteps_pull(parameter, name="parameter", priority=0)
-
     mx.nd.waitall()
     print("worker %d has parameter=" % (rank()), parameter.asnumpy())
 
+    byteps_pull(parameter, name="parameter", priority=0)
+    mx.nd.waitall()
+    print("worker %d pulled parameter=" % (rank()), parameter.asnumpy())
+    
     for i in range(20):
 
         mx.nd.waitall()

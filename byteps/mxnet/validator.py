@@ -54,8 +54,8 @@ class NaiveValidator(Validator):
         result /= validation_info['num_tensors']
 
 class TrimmedMeanValidator(Validator):
-    def __init__(self, num_trimmed = 1):
-        self.num_trimmed = num_trimmed
+    def __init__(self, ratio_trimmed = 0.2):
+        self.ratio_trimmed = ratio_trimmed
     # implement simple average
     def validate(self, update, result, validation_info = None):
         # update sould be a list of tensors
@@ -63,12 +63,20 @@ class TrimmedMeanValidator(Validator):
         assert isinstance(
         update, list
         ), "Input must be a list of tensors"
-        assert validation_info['num_tensors'] > 2 * self.num_trimmed
-        result[:] = mx.nd.stack(*update).sort(axis=0)[self.num_trimmed:(validation_info['num_tensors']-self.num_trimmed),:].mean(axis=0)
+        if validation_info['num_tensors'] <= 2:
+            result[:] = 0
+            # result[:] = update[0]
+            # for i in range(1, validation_info['num_tensors']):
+            #     result[:] += update[i]
+            # result /= validation_info['num_tensors']
+        else:
+            num_trimmed = int(min((validation_info['num_tensors']-2) // 2, validation_info['num_tensors'] * self.ratio_trimmed))
+            # assert validation_info['num_tensors'] > 2 * num_trimmed
+            result[:] = mx.nd.stack(*update[:validation_info['num_tensors']]).sort(axis=0)[num_trimmed:(validation_info['num_tensors']-num_trimmed),:].mean(axis=0)
 
 class PhocasValidator(Validator):
-    def __init__(self, num_trimmed = 1):
-        self.num_trimmed = num_trimmed
+    def __init__(self, ratio_trimmed = 0.2):
+        self.ratio_trimmed = ratio_trimmed
     # implement simple average
     def validate(self, update, result, validation_info = None):
         # update sould be a list of tensors
@@ -76,10 +84,14 @@ class PhocasValidator(Validator):
         assert isinstance(
         update, list
         ), "Input must be a list of tensors"
-        assert validation_info['num_tensors'] > 2 * self.num_trimmed
-        sorted_array = mx.nd.stack(*update[:validation_info['num_tensors']]).sort(axis=0)
-        trimmed_mean = sorted_array[self.num_trimmed:(validation_info['num_tensors']-self.num_trimmed),:].mean(axis=0, keepdims=1)
-        result[:] = mx.nd.sum(sorted_array * mx.nd.topk(mx.nd.abs(sorted_array-trimmed_mean), ret_typ='mask', k=(validation_info['num_tensors']-self.num_trimmed), is_ascend=1, axis=0), axis=0) / float(validation_info['num_tensors']-self.num_trimmed)
+        if validation_info['num_tensors'] <= 2:
+            result[:] = 0
+        else:
+            num_trimmed = int(max(1, validation_info['num_tensors'] * self.ratio_trimmed)) 
+            # assert validation_info['num_tensors'] > 2 * num_trimmed
+            sorted_array = mx.nd.stack(*update[:validation_info['num_tensors']]).sort(axis=0)
+            trimmed_mean = sorted_array[num_trimmed:(validation_info['num_tensors']-num_trimmed),:].mean(axis=0, keepdims=1)
+            result[:] = mx.nd.sum(sorted_array * mx.nd.topk(mx.nd.abs(sorted_array-trimmed_mean), ret_typ='mask', k=(validation_info['num_tensors']-num_trimmed), is_ascend=1, axis=0), axis=0) / float(validation_info['num_tensors']-num_trimmed)
 
 class ZenoValidator(Validator):
     def __init__(self, eta = 0.1, rho = 0.1):
@@ -125,12 +137,36 @@ class ZenoppValidator(Validator):
         a = (update * validation_info['validation_tensor']).mean().asscalar()
         b = validation_info['validation_tensor'].square().mean().asscalar()
         c = update.square().mean().asscalar()
-        if a > b * self.eta and c < b * (1 + self.rho):
-            # result[:] = update * (self.alpha / 0.5 * (1 + math.exp(- 5 * a / math.sqrt(b) / math.sqrt(c))) )
-            result[:] = update * self.alpha
+
+        # if a > b * self.eta and c < b * (1 + self.rho):
+        #     # result[:] = update * (self.alpha / 0.5 * (1 + math.exp(- 5 * a / math.sqrt(b) / math.sqrt(c))) )
+        #     result[:] = update * self.alpha
+        #     return 1
+        # else:
+        #     # result[:] = 0
+        #     # return 0
+        #     result[:] = update * (self.alpha * a / math.sqrt(b) / math.sqrt(c))
+        #     # if a > 0:
+        #     #     result[:] = update * (self.alpha * a / math.sqrt(b) / math.sqrt(c) * min(1 + self.rho, math.sqrt(b) / math.sqrt(c)))
+        #     # else:
+        #     #     result[:] = update * (self.alpha * a / math.sqrt(b) / math.sqrt(c))
+        #     return 0
+
+        # clip
+        if c > b:
+            clip = math.sqrt(b/c)
+            c = b
+            a *= clip
+        else: clip = 1.
+
+        score = a / math.sqrt(b * c)
+
+        if score >= self.eta:
+            result[:] = update * self.alpha * clip
             return 1
         else:
-            result[:] = 0
+            result[:] = update * (clip * self.alpha * score)
+            # result[:] = 0
             return 0
 
 class NaiveAsyncValidator(Validator):
@@ -140,10 +176,10 @@ class NaiveAsyncValidator(Validator):
     def validate(self, update, result, validation_info = None):
         # update sould be single tensor
         # validation_info contains the validation tensor
-        # add some dummy computation, so that the delay on the validator won't affect the overall latency and asynchrony, which makes it fair for zeno
-        a = (update * update).mean().asscalar()
-        b = update.square().mean().asscalar()
-        c = update.square().mean().asscalar()
+        # # add some dummy computation, so that the delay on the validator won't affect the overall latency and asynchrony, which makes it fair for zeno
+        # a = (update * update).mean().asscalar()
+        # b = update.square().mean().asscalar()
+        # c = update.square().mean().asscalar()
         result[:] = update * self.alpha
 
 class FedAsyncValidator(Validator):

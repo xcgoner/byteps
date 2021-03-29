@@ -93,8 +93,14 @@ def parse_args():
                         help='number of local steps.')
     parser.add_argument('--validation-type', type=str, default='average',
                         help='method for validator')
+    parser.add_argument('--alpha', type=float, default=0.8,
+                        help='the mixing parameter. default is 0.8.')
     parser.add_argument('--alpha-decay', type=float, default=0.5,
                         help='decay rate of the mixing parameter. default is 0.1.')
+    parser.add_argument('--alpha-decay-epoch', type=str, default='100,150',
+                        help='epochs at which learning rate decays. default is 100,150.')
+    parser.add_argument('--zeno-eta', type=float, default=-0.001,
+                        help='eta of zeno, default is -0.001')
     opt = parser.parse_args()
     return opt
 
@@ -104,12 +110,15 @@ def main():
 
     bps.init()
 
-    gpu_name = subprocess.check_output(
-        ['nvidia-smi', '--query-gpu=gpu_name', '--format=csv'])
-    gpu_name = gpu_name.decode('utf8').split('\n')[-2]
-    gpu_name = '-'.join(gpu_name.split())
+    if opt.num_gpus > 0:
+        gpu_name = subprocess.check_output(
+            ['nvidia-smi', '--query-gpu=gpu_name', '--format=csv'])
+        gpu_name = gpu_name.decode('utf8').split('\n')[-2]
+        gpu_name = '-'.join(gpu_name.split())
+        device_name = gpu_name
+    else: device_name = "cpu"
     filename = "cifar10-validator-%d-%s-%s.log" % (bps.rank(),
-                                          gpu_name, opt.logging_file)
+                                          device_name, opt.logging_file)
     filehandler = logging.FileHandler(filename)
     streamhandler = logging.StreamHandler()
 
@@ -135,6 +144,7 @@ def main():
 
     lr_decay = opt.lr_decay
     lr_decay_epoch = [int(i) for i in opt.lr_decay_epoch.split(',')] + [np.inf]
+    alpha_decay_epoch = [int(i) for i in opt.alpha_decay_epoch.split(',')] + [np.inf]
 
     # num_batches = 50000 // (opt.batch_size * nworker)
     # # base_lr = opt.lr * nworker / bps.local_size()
@@ -224,7 +234,8 @@ def main():
                                             opt.optimizer,
                                             optimizer_params, 
                                             validation_type = opt.validation_type, 
-                                            sync_interval = opt.sync_interval)
+                                            sync_interval = opt.sync_interval,
+                                            zeno_eta = opt.zeno_eta)
         else:
             optimizer_params['learning_rate'] *= math.sqrt(1./(worker_size()+1))
             # optimizer_params['learning_rate'] /= (worker_size()+1)
@@ -232,6 +243,7 @@ def main():
                                             opt.optimizer,
                                             optimizer_params, 
                                             rho = 0.2, 
+                                            alpha = opt.alpha, 
                                             validation_type = opt.validation_type, 
                                             sync_interval = opt.sync_interval)
         metric = mx.metric.Accuracy()
@@ -240,8 +252,10 @@ def main():
 
         iteration = 0
         lr_decay_count = 0
+        alpha_decay_count = 0
         best_val_score = 0
         # bps.byteps_declare_tensor("acc")
+        logger.info('Validator %d, started' %(rank))
         for epoch in range(epochs):
             tic = time.time()
             train_metric.reset()
@@ -261,10 +275,13 @@ def main():
             if epoch == lr_decay_epoch[lr_decay_count]:
                 trainer.set_learning_rate(trainer.learning_rate*lr_decay)
                 lr_decay_count += 1
-                if opt.sync_mode == "async":
+            if opt.sync_mode == "async":
+                if epoch == alpha_decay_epoch[alpha_decay_count]:
                     for validator in trainer.validators:
                         if validator:
                             validator.alpha *= opt.alpha_decay
+                    logger.info('[Epoch %d] validation alpha decayed: %f' % (epoch, trainer.validators[0].alpha))   
+                    lr_decay_count += 1
 
             for i, batch in enumerate(val_data):
                 # if first_batch or opt.validation_type == "zeno++":
@@ -291,18 +308,18 @@ def main():
 
             # train_loss /= batch_size * num_batch
             # name, train_acc = train_metric.get()
-            throughput = int(batch_size * nworker * i / (time.time() - tic))
+            if rank == 0:
+                throughput = int(batch_size * nworker * i / (time.time() - tic))
 
-            logger.info('[Epoch %d] speed: %d samples/sec\ttime cost: %f lr=%f' %
-                        (epoch, throughput, time.time()-tic, trainer.learning_rate))
+                logger.info('[Epoch %d] speed: %d samples/sec\ttime cost: %f lr=%f' %
+                            (epoch, throughput, time.time()-tic, trainer.learning_rate))
 
-            name, test_acc = test(ctx, test_data)
-            name, val_acc = test(ctx, val_data)
-            # acc = mx.nd.array([train_acc, val_acc, test_acc], ctx=ctx[0])
-            # bps.byteps_push_pull(acc, name="acc", is_average=False)
-            # acc /= bps.size()
-            # train_acc, val_acc = acc[0].asscalar(), acc[1].asscalar()
-            if bps.rank() == 0:
+                name, test_acc = test(ctx, test_data)
+                # name, val_acc = test(ctx, val_data)
+                # acc = mx.nd.array([train_acc, val_acc, test_acc], ctx=ctx[0])
+                # bps.byteps_push_pull(acc, name="acc", is_average=False)
+                # acc /= bps.size()
+                # train_acc, val_acc = acc[0].asscalar(), acc[1].asscalar()
                 # logger.info('[Epoch %d] training: %s=%f' %
                 #             (epoch, name, train_acc))
                 # logger.info('[Epoch %d] validation: %s=%f' %
@@ -312,19 +329,19 @@ def main():
                 if "zeno" in opt.validation_type:
                     logger.info('[Epoch %d] validation rate: %f' % (epoch, trainer.validation_counter / trainer.recv_counter))    
 
-            if val_acc > best_val_score:
-                best_val_score = val_acc
-                net.save_parameters('%s/%.4f-cifar-%s-%d-best.params' %
-                                    (save_dir, best_val_score, model_name,
-                                     epoch))
+        #     if val_acc > best_val_score:
+        #         best_val_score = val_acc
+        #         net.save_parameters('%s/%.4f-cifar-%s-%d-best.params' %
+        #                             (save_dir, best_val_score, model_name,
+        #                              epoch))
 
-            if save_period and save_dir and (epoch + 1) % save_period == 0:
-                net.save_parameters('%s/cifar10-%s-%d.params' %
-                                    (save_dir, model_name, epoch))
+        #     if save_period and save_dir and (epoch + 1) % save_period == 0:
+        #         net.save_parameters('%s/cifar10-%s-%d.params' %
+        #                             (save_dir, model_name, epoch))
 
-        if save_period and save_dir:
-            net.save_parameters('%s/cifar10-%s-%d.params' %
-                                (save_dir, model_name, epochs-1))
+        # if save_period and save_dir:
+        #     net.save_parameters('%s/cifar10-%s-%d.params' %
+        #                         (save_dir, model_name, epochs-1))
 
     if opt.mode == 'hybrid':
         net.hybridize()

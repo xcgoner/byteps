@@ -476,6 +476,7 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
     auto recved = reinterpret_cast<char*>(req_data.vals.data());
     auto tid = GetThreadID(key, len);
     if (!stored->tensor) {
+      PS_VLOG(2) << "Init by " << (is_from_validator ? "validator " : "worker ") << Postoffice::IDtoRank(req_meta.sender);
       // first push, the tensor buf is not initialized yet
       if (sync_mode_ && (update_buf_.find(key) == update_buf_.end())) {
         update_buf_[key].merged.len = len;
@@ -511,6 +512,9 @@ void BytePSHandlerWithValidators(const ps::KVMeta& req_meta,
         // push from a validator, must be pulled by both workers and validators
         // debug
         PS_VLOG(1) << "parameter pushed by validator " << Postoffice::IDtoRank(req_meta.sender);
+        if (Postoffice::Get()->verbose() >= 2) {
+          print_array(recved, bps_reducer_->GetDataType(type.dtype), "");
+        }
         is_global_shared_[key] = true;
         auto &updates = update_buf_[key];
         if (updates.request.empty()) { // from the first incoming worker
@@ -708,6 +712,7 @@ void init_global_env() {
   // sync or async training
   sync_mode_ = !GetEnv("BYTEPS_ENABLE_ASYNC", false);
   if (!sync_mode_) LOG(INFO) << "BytePS server is enabled asynchronous training";
+  else LOG(INFO) << "BytePS server is enabled synchronous training";
 
   // debug mode
   debug_mode_ = GetEnv("BYTEPS_SERVER_DEBUG", false);

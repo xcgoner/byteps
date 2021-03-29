@@ -14,7 +14,9 @@
 // =============================================================================
 
 #include "core_loops.h"
+#if HAVE_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <chrono>
 #include <memory>
 #include "common.h"
@@ -45,6 +47,7 @@ void FinishOrProceed(std::shared_ptr<TensorTableEntry> task) {
                      << *((float *)(task->output->data()) + j)
                      << "\t after stage: " << LogStrings[this_op];
     } else {
+      #if HAVE_CUDA
       float i0, i1, o0, o1;
       cudaMemcpy(&i0, (float *)(task->tensor->data()) + i, 4,
                  cudaMemcpyDeviceToHost);
@@ -59,6 +62,8 @@ void FinishOrProceed(std::shared_ptr<TensorTableEntry> task) {
                      << " input[0]=" << i0 << "\tinput[-1]=" << i1
                      << "\toutput[0]=" << o0 << "\toutput[-1]=" << o1
                      << "\t after stage: " << LogStrings[this_op];
+      #endif
+      
     }
   }
 
@@ -138,6 +143,7 @@ bool RunCoordinateLoopOnce(QueueType this_op) {
     std::shared_ptr<BytePSComm> comm;
 
     switch (this_op) {
+      #if HAVE_CUDA
       case COORDINATE_REDUCE: {
         sig = REDUCE_READY;
         comm = BytePSGlobal::GetNccl()->GetSignalComm();
@@ -148,6 +154,7 @@ bool RunCoordinateLoopOnce(QueueType this_op) {
         comm = BytePSGlobal::GetNccl()->GetSignalComm();
         break;
       }
+      #endif
       case COORDINATE_PUSH: {
         sig = PUSH_READY;
         comm = BytePSGlobal::GetBasicComm();
@@ -173,6 +180,7 @@ bool RunCoordinateLoopOnce(QueueType this_op) {
   return true;
 }
 
+#if HAVE_CUDA
 inline void PostNcclCalls(
     std::shared_ptr<byteps::common::TensorTableEntry> task, QueueType this_op) {
   BPS_CHECK(this_op == REDUCE || this_op == BROADCAST)
@@ -482,6 +490,7 @@ bool RunPcieReduceLoopOnce() {
   }
   return true;
 }
+#endif
 
 bool RunPushLoopOnce() {
   QueueType this_op = PUSH;
@@ -557,6 +566,7 @@ bool RunPullLoopOnce() {
   return true;
 }
 
+#if HAVE_CUDA
 void CopyHost2Device(std::shared_ptr<byteps::common::TensorTableEntry> task) {
   auto copy_h2d_stream = BytePSGlobal::GetCopyHost2DeviceStream();
   auto tensor = task->output;
@@ -629,6 +639,21 @@ bool RunRootCopyHost2DeviceLoopOnce() {
   return true;
 }
 
+bool RunNonRootCopyHost2DeviceLoopOnce() {
+  QueueType this_op = COPYH2D;
+  auto q = BytePSGlobal::GetScheduledQueue(this_op);
+  auto task = q->getTask();
+
+  if (task) {
+    CopyHost2Device(task);
+    FinishOrProceed(task);
+  } else {
+    std::this_thread::sleep_for(std::chrono::nanoseconds(1000));
+  }
+  return true;
+}
+#endif
+
 bool RunNonRootCopyListenLoopOnce() {
   auto signal_comm = BytePSGlobal::GetBasicComm();
   int root = signal_comm->getRoot();
@@ -646,20 +671,6 @@ bool RunNonRootCopyListenLoopOnce() {
   BPS_LOG(TRACE) << "NonRootCopyListenLoop recved from root"
                  << ", signal=" << msg.signal << ", key=" << msg.key
                  << ", myrank=" << rank;
-  return true;
-}
-
-bool RunNonRootCopyHost2DeviceLoopOnce() {
-  QueueType this_op = COPYH2D;
-  auto q = BytePSGlobal::GetScheduledQueue(this_op);
-  auto task = q->getTask();
-
-  if (task) {
-    CopyHost2Device(task);
-    FinishOrProceed(task);
-  } else {
-    std::this_thread::sleep_for(std::chrono::nanoseconds(1000));
-  }
   return true;
 }
 
@@ -684,13 +695,14 @@ void CoordinatePushLoop() {
   BytePSGlobal::ReportThreadFinish();
 }
 
+
+#if HAVE_CUDA
 void PcieReduceLoop() {
   CUDA_CALL(cudaSetDevice(BytePSGlobal::GetLocalRank()));
   while (RunPcieReduceLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
   }
   BytePSGlobal::ReportThreadFinish();
 }
-
 void RootNcclLoop() {
   CUDA_CALL(cudaSetDevice(BytePSGlobal::GetLocalRank()));
   while (RunRootNcclLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
@@ -719,18 +731,6 @@ void CopyDevice2HostLoop() {
   BytePSGlobal::ReportThreadFinish();
 }
 
-void PushLoop() {
-  while (RunPushLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
-  }
-  BytePSGlobal::ReportThreadFinish();
-}
-
-void PullLoop() {
-  while (RunPullLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
-  }
-  BytePSGlobal::ReportThreadFinish();
-}
-
 void RootCopyHost2DeviceLoop() {
   CUDA_CALL(cudaSetDevice(BytePSGlobal::GetLocalRank()));
   while (RunRootCopyHost2DeviceLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
@@ -749,6 +749,19 @@ void NonRootCopyHost2DeviceLoop() {
   CUDA_CALL(cudaSetDevice(BytePSGlobal::GetLocalRank()));
   while (RunNonRootCopyHost2DeviceLoopOnce() &&
          !BytePSGlobal::ShouldShutdown()) {
+  }
+  BytePSGlobal::ReportThreadFinish();
+}
+#endif
+
+void PushLoop() {
+  while (RunPushLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
+  }
+  BytePSGlobal::ReportThreadFinish();
+}
+
+void PullLoop() {
+  while (RunPullLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
   }
   BytePSGlobal::ReportThreadFinish();
 }

@@ -36,6 +36,7 @@ BytePSCommSocket::BytePSCommSocket(std::shared_ptr<BytePSComm> comm,
   _local_rank = sock_comm->getLocalRank();
   _local_size = sock_comm->getLocalSize();
   _worker_id = sock_comm->getWorkerID();
+  _is_validator = sock_comm->isValidator();
   _send_path = sock_comm->getSendPath() + path_suffix;
   _recv_path = sock_comm->getRecvPath() + path_suffix;
   _send_fd = initSocket(_local_rank, _send_path);
@@ -58,7 +59,7 @@ BytePSCommSocket::BytePSCommSocket(std::shared_ptr<BytePSComm> comm,
 }
 
 void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
-                            int* local_size, int* worker_id,
+                            int* local_size, int* worker_id, bool* is_validator,
                             BytePSRole* my_role, int* worker_size, int* validator_size) {
   BPS_LOG(DEBUG) << "Using Communicator=Socket";
 
@@ -74,8 +75,9 @@ void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
   *local_rank = atoi(getenv("BYTEPS_LOCAL_RANK"));
   *local_size = atoi(getenv("BYTEPS_LOCAL_SIZE"));
   *worker_id = atoi(getenv("DMLC_WORKER_ID") ? getenv("DMLC_WORKER_ID") : getenv("DMLC_VALIDATOR_ID"));
-  auto num_worker = atoi(getenv("DMLC_NUM_WORKER"));
+  *is_validator = (strcmp(getenv("DMLC_WORKER_TYPE"), "validator") == 0);
 
+  auto num_worker = atoi(getenv("DMLC_NUM_WORKER"));
   *worker_size = num_worker;
   *validator_size = atoi(getenv("DMLC_NUM_VALIDATOR") ? getenv("DMLC_NUM_VALIDATOR") : 0);
 
@@ -94,6 +96,7 @@ void BytePSCommSocket::init(int* rank, int* size, int* local_rank,
   _local_rank = *local_rank;
   _local_size = *local_size;
   _worker_id = *worker_id;
+  _is_validator = *is_validator;
 
   for (int i = 0; i < _local_size; i++) {
     _members.push_back(i);

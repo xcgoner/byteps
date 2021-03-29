@@ -22,10 +22,13 @@ namespace byteps {
 namespace common {
 
 BytePSScheduledQueue::BytePSScheduledQueue(QueueType type) {
+  _is_scheduled = false;
+  _qt = type;
+  _credits = 34359738368;  // 32GB, basically disabling credit control
+
+  #if HAVE_CUDA
   if (type == REDUCE && BytePSGlobal::GetNccl()->IsSignalRoot()) {
     _is_scheduled = true;
-  } else {
-    _is_scheduled = false;
   }
 
   size_t credit_in_partition = BytePSGlobal::GetNccl()->GetGroupSize() + 1;
@@ -35,14 +38,16 @@ BytePSScheduledQueue::BytePSScheduledQueue(QueueType type) {
   if (!credit_in_partition) { // disable scheduling by default
     _is_scheduled = false;
   }
-
-  _qt = type;
+  
   _credits = _is_scheduled
               ? BytePSGlobal::GetPartitionBound() * credit_in_partition
               : 34359738368;  // 32GB, basically disabling credit control
+  #endif
+
   _rt = nullptr;
 
   switch (_qt) {
+    #if HAVE_CUDA
     case REDUCE:
       if (BytePSGlobal::GetNccl()->IsSignalRoot()) {
         _rt = BytePSGlobal::GetReduceTable();
@@ -55,11 +60,15 @@ BytePSScheduledQueue::BytePSScheduledQueue(QueueType type) {
         }
       }
       break;
+    #endif
+    
     case PUSH:
       if (BytePSGlobal::IsRootDevice()) {
         _rt = BytePSGlobal::GetPushTable();
       }
       break;
+
+    #if HAVE_CUDA
     case COPYH2D:
       if (!BytePSGlobal::IsRootDevice()) {
         _rt = BytePSGlobal::GetCopyTable();
@@ -70,6 +79,8 @@ BytePSScheduledQueue::BytePSScheduledQueue(QueueType type) {
         _rt = BytePSGlobal::GetBroadcastTable();
       }
       break;
+    #endif
+    
     default:
       break;
   }

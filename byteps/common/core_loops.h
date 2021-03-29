@@ -25,6 +25,7 @@ void CoordinateBroadcastLoop();
 
 void CoordinatePushLoop();
 
+#if HAVE_CUDA
 void PcieReduceLoop();
 
 void RootNcclLoop();
@@ -35,15 +36,16 @@ void SyncNcclLoop();
 
 void CopyDevice2HostLoop();
 
-void PushLoop();
-
-void PullLoop();
-
 void RootCopyHost2DeviceLoop();
 
 void NonRootCopyListenLoop();
 
 void NonRootCopyHost2DeviceLoop();
+#endif
+
+void PushLoop();
+
+void PullLoop();
 
 }  // namespace common
 }  // namespace byteps

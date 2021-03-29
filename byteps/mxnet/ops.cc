@@ -247,6 +247,7 @@ extern "C" void byteps_mxnet_declare_tensor(char* name) {
 
 extern "C" void byteps_mxnet_declare_and_init_tensor(char* name, NDArray* tensor) {
   std::string tensor_name = GetOpName("byteps", name);
+
   common::IsTensorDeclared(tensor_name);
   
   // initialize tensor on server

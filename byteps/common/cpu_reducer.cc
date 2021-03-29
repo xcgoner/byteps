@@ -25,6 +25,7 @@ namespace common {
 CpuReducer::CpuReducer(std::shared_ptr<BytePSComm> comm) {
 
 #ifndef BYTEPS_BUILDING_SERVER
+  #if HAVE_CUDA
   std::vector<int> peers;
   auto pcie_size = BytePSGlobal::GetPcieSwitchSize();
   for (int i = BytePSGlobal::GetLocalRank() % pcie_size;
@@ -37,6 +38,7 @@ CpuReducer::CpuReducer(std::shared_ptr<BytePSComm> comm) {
   else {
     _comm = nullptr;
   }
+  #endif
 #endif
 
   if (getenv("BYTEPS_OMP_THREAD_PER_GPU")) {

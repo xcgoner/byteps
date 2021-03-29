@@ -32,9 +32,6 @@ from mxnet import autograd as ag
 from mxnet import gluon
 from mxnet.gluon.data.vision import transforms
 
-import byteps.mxnet as bps
-from byteps.mxnet.ops import size, local_size, rank, local_rank, worker_size, validator_size
-
 matplotlib.use('Agg')
 
 
@@ -87,32 +84,15 @@ def parse_args():
     parser.add_argument('--logging-file', type=str, default='baseline',
                         help='name of training log file')
     # options for zeno ps
-    parser.add_argument('--sync-mode', type=str, default='sync', choices=["sync", "async"], 
-                        help='sync or async')
-    parser.add_argument('--sync-interval', type=int, default=1,
-                        help='number of local steps.')
-    parser.add_argument('--validation-type', type=str, default='average',
-                        help='method for validator')
-    # Byzantine worker
-    parser.add_argument('--byz-type', type=str, default='none', choices=["none", "random", "randomscale", "negative"], 
-                        help='type of attacks')
-    parser.add_argument('--byz-scale', type=float, default=10, 
-                        help='rescale Byzantine updates')
-    parser.add_argument('--byz-rate', type=float, default=0.0,
-                        help='rate for poisoned communication. default is 0.')
-    # communication compression
-    parser.add_argument('--sparse-rate', type=float, default=0.0,
-                        help='rate for sparse communication. default is 0.')
-    parser.add_argument('--worker-subsample-rate', type=float, default=1.0,
-                        help='rate for worker subsampling. default is 1.0')
+    parser.add_argument('--nparts', type=int, default=16, 
+                        help='the number of partitions')
+
     opt = parser.parse_args()
     return opt
 
 
 def main():
     opt = parse_args()
-
-    bps.init()
 
     if opt.num_gpus > 0:
         gpu_name = subprocess.check_output(
@@ -121,7 +101,7 @@ def main():
         gpu_name = '-'.join(gpu_name.split())
         device_name = gpu_name
     else: device_name = "cpu"
-    filename = "cifar10-worker-%d-%s-%s.log" % (bps.rank(),
+    filename = "cifar10-worker-%d-%s-%s.log" % (opt.nparts,
                                           device_name, opt.logging_file)
     filehandler = logging.FileHandler(filename)
     streamhandler = logging.StreamHandler()
@@ -137,33 +117,13 @@ def main():
     classes = 10
 
     num_gpus = opt.num_gpus
-    # batch_size *= max(1, num_gpus)
-    # context = mx.gpu(bps.local_rank()) if num_gpus > 0 else mx.cpu(
-    #     bps.local_rank())
     ctx_idx = int(os.environ.get('NVIDIA_VISIBLE_DEVICES', '0'))
     context = mx.gpu(ctx_idx) if num_gpus > 0 else mx.cpu()
     num_workers = opt.num_workers
-    nworker = nworker = worker_size()
-    rank = bps.rank()
+    rank = opt.nparts
 
     lr_decay = opt.lr_decay
     lr_decay_epoch = [int(i) for i in opt.lr_decay_epoch.split(',')] + [np.inf]
-
-    # num_batches = 50000 // (opt.batch_size * (nworker+1))
-    # print(num_batches)
-    # # base_lr = opt.lr * nworker / bps.local_size()
-    # base_lr = opt.lr
-    # lr_scheduler = LRSequential([
-    #     LRScheduler('linear', base_lr=opt.warmup_lr,
-    #                 target_lr=base_lr,
-    #                 nepochs=opt.warmup_epochs, iters_per_epoch=num_batches),
-    #     LRScheduler('step', base_lr=base_lr,
-    #                 target_lr=0,
-    #                 nepochs=opt.num_epochs - opt.warmup_epochs,
-    #                 iters_per_epoch=num_batches,
-    #                 step_epoch=lr_decay_epoch,
-    #                 step_factor=lr_decay, power=2)
-    # ])
 
     model_name = opt.model
     if model_name.startswith('cifar_wideresnet'):
@@ -213,13 +173,7 @@ def main():
 
         train_data = gluon.data.DataLoader(
             gluon.data.vision.CIFAR10(train=True).shard(
-                bps.worker_size()+1, rank).transform_first(transform_train),
-            batch_size=batch_size, shuffle=True, last_batch='discard',
-            num_workers=num_workers)
-        
-        val_data = gluon.data.DataLoader(
-            gluon.data.vision.CIFAR10(train=True).shard(
-                bps.worker_size()+1, bps.worker_size()).transform_first(transform_train),
+                opt.nparts+1, rank).transform_first(transform_train),
             batch_size=batch_size, shuffle=True, last_batch='discard',
             num_workers=num_workers)
 
@@ -233,27 +187,9 @@ def main():
         optimizer_params = {'learning_rate': opt.lr,
                             'wd': opt.wd, 'momentum': opt.momentum}
 
-        attack_params = {'byz_type': opt.byz_type, 'byz_scale': opt.byz_scale, 'byz_rate': opt.byz_rate}
+        trainer = gluon.Trainer(net.collect_params(), opt.optimizer,
+                                {'learning_rate': opt.lr, 'wd': opt.wd, 'momentum': opt.momentum})
 
-        if opt.sync_mode == "sync":
-            trainer = bps.DistributedZenoWorkerSyncTrainer(params,
-                                            opt.optimizer,
-                                            optimizer_params, 
-                                            sync_interval = opt.sync_interval, 
-                                            worker_subsample_rate = opt.worker_subsample_rate,
-                                            sparse_rate = opt.sparse_rate, 
-                                            attack_params = attack_params)
-        else:
-            optimizer_params['learning_rate'] *= math.sqrt(1./(worker_size()+1))
-            # optimizer_params['learning_rate'] /= (worker_size()+1)
-            trainer = bps.DistributedZenoWorkerAsyncTrainer(params,
-                                            opt.optimizer,
-                                            optimizer_params, 
-                                            rho = 0.2, 
-                                            sync_interval = opt.sync_interval, 
-                                            worker_subsample_rate = opt.worker_subsample_rate,
-                                            sparse_rate = opt.sparse_rate, 
-                                            attack_params = attack_params)
         metric = mx.metric.Accuracy()
         train_metric = mx.metric.Accuracy()
         loss_fn = gluon.loss.SoftmaxCrossEntropyLoss()
@@ -261,7 +197,6 @@ def main():
         iteration = 0
         lr_decay_count = 0
         best_val_score = 0
-        # bps.byteps_declare_tensor("acc")
         logger.info('Worker %d, started' %(rank))
         for epoch in range(epochs):
             tic = time.time()
@@ -277,63 +212,41 @@ def main():
                 trainer.set_learning_rate(trainer.learning_rate*lr_decay)
                 lr_decay_count += 1
 
-            for i, batch in enumerate(train_data):
-                data = gluon.utils.split_and_load(
-                    batch[0], ctx_list=ctx, batch_axis=0)
-                label = gluon.utils.split_and_load(
-                    batch[1], ctx_list=ctx, batch_axis=0)
+            for _ in range(opt.nparts):
+                for i, batch in enumerate(train_data):
+                    data = gluon.utils.split_and_load(
+                        batch[0], ctx_list=ctx, batch_axis=0)
+                    label = gluon.utils.split_and_load(
+                        batch[1], ctx_list=ctx, batch_axis=0)
 
-                with ag.record():
-                    output = [net(X) for X in data]
-                    loss = [loss_fn(yhat, y) for yhat, y in zip(output, label)]
-                for l in loss:
-                    l.backward()
+                    with ag.record():
+                        output = [net(X) for X in data]
+                        loss = [loss_fn(yhat, y) for yhat, y in zip(output, label)]
+                    for l in loss:
+                        l.backward()
 
-                trainer.step(batch_size)
-                train_loss += sum([l.sum().asscalar() for l in loss])
+                    trainer.step(batch_size)
+                    train_loss += sum([l.sum().asscalar() for l in loss])
 
-                train_metric.update(label, output)
-                name, train_acc = train_metric.get()
-                iteration += 1
+                    train_metric.update(label, output)
+                    name, train_acc = train_metric.get()
+                    iteration += 1
 
-                # mx.nd.waitall()
-                # print("iteration %d finished" % (iteration))
+                    # mx.nd.waitall()
+                    # print("iteration %d finished" % (iteration))
 
-            train_loss /= batch_size * num_batch
+            train_loss /= batch_size * num_batch * opt.nparts
             name, train_acc = train_metric.get()
-            throughput = int(batch_size * nworker * i / (time.time() - tic))
+            throughput = int(batch_size * i * opt.nparts / (time.time() - tic))
 
-            # logger.info('[Epoch %d] speed: %d samples/sec\ttime cost: %f lr=%f' %
-            #             (epoch, throughput, time.time()-tic, trainer.learning_rate))
+            logger.info('[Epoch %d] speed: %d samples/sec\ttime cost: %f lr=%f' %
+                            (epoch, throughput, time.time()-tic, trainer.learning_rate))
+            logger.info('[Epoch %d] training: %s=%f loss=%f' %
+                        (epoch, name, train_acc, train_loss))
 
-            # name, test_acc = test(ctx, test_data)
-            # name, val_acc = test(ctx, val_data)
-
-            # acc = mx.nd.array([train_acc, val_acc, test_acc], ctx=ctx[0])
-            # bps.byteps_push_pull(acc, name="acc", is_average=False)
-            # acc /= bps.size()
-            # train_acc, val_acc = acc[0].asscalar(), acc[1].asscalar()
-            
-            # logger.info('[Epoch %d] training: %s=%f' %
-            #             (epoch, name, train_acc))
-            # logger.info('[Epoch %d] validation: %s=%f' %
-            #             (epoch, name, val_acc))
-            # logger.info('[Epoch %d] test: %s=%f' %
-            #             (epoch, name, test_acc))
-
-        #     if val_acc > best_val_score:
-        #         best_val_score = val_acc
-        #         net.save_parameters('%s/%.4f-cifar-%s-%d-best.params' %
-        #                             (save_dir, best_val_score, model_name,
-        #                              epoch))
-
-        #     if save_period and save_dir and (epoch + 1) % save_period == 0:
-        #         net.save_parameters('%s/cifar10-%s-%d.params' %
-        #                             (save_dir, model_name, epoch))
-
-        # if save_period and save_dir:
-        #     net.save_parameters('%s/cifar10-%s-%d.params' %
-        #                         (save_dir, model_name, epochs-1))
+            name, test_acc = test(ctx, test_data)
+            logger.info('[Epoch %d] test: %s=%f' %
+                        (epoch, name, test_acc))
 
     if opt.mode == 'hybrid':
         net.hybridize()

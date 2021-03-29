@@ -40,6 +40,13 @@ class RandomAttack(Attack):
     def attack(self, update):
         update[:] = mx.nd.random.normal(0, self.rescale, shape=update.shape)
 
+class RandomAttack2(Attack):
+    def attack(self, update):
+        scale = mx.nd.norm(update) * self.rescale
+        update[:] = mx.nd.random.normal(0, 1, shape=update.shape)
+        update[:] /= mx.nd.norm(update)
+        update[:] *= scale
+
 class NegativeAttack(Attack):
     def attack(self, update):
         update[:] *= (-self.rescale)

@@ -29,7 +29,9 @@
 #include "communicator.h"
 #include "cpu_reducer.h"
 #include "logging.h"
+#if HAVE_CUDA
 #include "nccl_manager.h"
+#endif
 #include "ps/ps.h"
 #include "ready_table.h"
 #include "scheduled_queue.h"
@@ -61,7 +63,9 @@ class BytePSGlobal {
   static int GetSize() { return _size; }
   static int GetLocalSize() { return _local_size; }
   static int GetWorkerID() { return _worker_id; }
+  static bool IsValidator() { return _is_validator; }
   static int GetNumWorker() { return _num_worker; }
+  #if HAVE_CUDA
   static int GetPcieSwitchSize() { return _nccl_manager->GetSize(); }
   static int GetPcieSwitchIndex() {
     return _local_rank / _nccl_manager->GetSize();
@@ -69,6 +73,8 @@ class BytePSGlobal {
   static int GetPcieSwitchNum() {
     return _local_size / _nccl_manager->GetSize();
   }
+  #endif
+  
   static bool IsRootDevice() { return _is_root_device; }
   static bool IsDistributed() { return _is_distributed_job; }
   static bool IsCrossPcieSwitch() { return _is_cross_pcie_switch; }
@@ -99,8 +105,10 @@ class BytePSGlobal {
 
   static uint32_t GetPartitionBound() { return _partition_bytes; }
 
+  #if HAVE_CUDA
   static cudaStream_t* GetCopyDevice2HostStream();
   static cudaStream_t* GetCopyHost2DeviceStream();
+  #endif
 
   // methods to access or modify the _ready_table
   static ReadyTable* GetReduceTable() { return _reduce_table; }
@@ -117,7 +125,10 @@ class BytePSGlobal {
   // for non-root
   static ReadyTable* GetCopyTable() { return _copy_table; }
 
+  #if HAVE_CUDA
   static std::shared_ptr<NcclManager> GetNccl() { return _nccl_manager; }
+  #endif
+  
   static std::shared_ptr<CpuReducer> GetCpuReducer() { return _cpu_reducer; }
 
   static bool IsTensorSampled(uint64_t key) { return (key == _sample_key); }
@@ -145,6 +156,7 @@ class BytePSGlobal {
   static int _validator_size;
   static int _local_size;
   static int _worker_id;
+  static bool _is_validator;
   static int _num_worker;
   static bool _is_root_device;
   static bool _is_distributed_job;
@@ -172,8 +184,10 @@ class BytePSGlobal {
   static int _end_step;
   static std::string _trace_dir;
 
+  #if HAVE_CUDA
   static cudaStream_t* _copy_device2host_stream;
   static cudaStream_t* _copy_host2device_stream;
+  #endif
 
   static uint32_t _partition_bytes;
 
@@ -190,7 +204,9 @@ class BytePSGlobal {
   static bool _is_using_reduce;
   static std::vector<int> _reduce_roots;
 
+  #if HAVE_CUDA
   static std::shared_ptr<NcclManager> _nccl_manager;
+  #endif
   static std::shared_ptr<CpuReducer> _cpu_reducer;
 
   // for debug sampling

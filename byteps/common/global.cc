@@ -33,6 +33,7 @@ int BytePSGlobal::_local_size = 1;
 int BytePSGlobal::_worker_size = 1;
 int BytePSGlobal::_validator_size = 1;
 int BytePSGlobal::_worker_id = 0;
+bool BytePSGlobal::_is_validator = 0;
 int BytePSGlobal::_num_worker = 1;
 BytePSRole BytePSGlobal::_my_role;
 bool BytePSGlobal::_is_root_device;
@@ -75,10 +76,12 @@ std::vector<std::string> BytePSGlobal::_declared_tensors;
 bool BytePSGlobal::_is_resuming = false;
 std::unordered_map<std::string, BPSContext> BytePSGlobal::_name_to_cxt;
 unsigned int next_key_ = 0;
+#if HAVE_CUDA
 cudaStream_t* BytePSGlobal::_copy_device2host_stream = NULL;
 cudaStream_t* BytePSGlobal::_copy_host2device_stream = NULL;
 std::shared_ptr<NcclManager> BytePSGlobal::_nccl_manager;
 std::shared_ptr<CpuReducer> BytePSGlobal::_cpu_reducer;
+#endif
 
 std::hash<std::string> BytePSGlobal::_built_in_hash_fn;
 unsigned int BytePSGlobal::_built_in_hash_coefficient;
@@ -115,7 +118,7 @@ void BytePSGlobal::Init() {
 
   _basic_comm = std::make_shared<BytePSCommSocket>();
 
-  _basic_comm->init(&_rank, &_size, &_local_rank, &_local_size, &_worker_id,
+  _basic_comm->init(&_rank, &_size, &_local_rank, &_local_size, &_worker_id, &_is_validator, 
                     &_my_role, &_worker_size, &_validator_size);
 
   _is_root_device = (_my_role == LOCAL_ROOT) ? true : false;
@@ -162,7 +165,9 @@ void BytePSGlobal::Init() {
                  << (IsDistributed() ? "" : "non-") << "distributed job";
 
   _shm_obj = std::make_shared<BytePSSharedMemory>();  // share memory obj
-
+  
+  _is_cross_pcie_switch = false;
+  #if HAVE_CUDA
   // Set to associated GPU
   CUDA_CALL(cudaSetDevice(_local_rank));
 
@@ -182,6 +187,8 @@ void BytePSGlobal::Init() {
   if (_is_cross_pcie_switch) {
     _cpu_reducer = std::make_shared<CpuReducer>(_basic_comm);
   }
+  #endif
+  
 
   // ReadyTable for Push & Pull
   if (_is_root_device) {
@@ -190,6 +197,7 @@ void BytePSGlobal::Init() {
     _copy_table = new ReadyTable(1, "COPY");
   }
 
+  #if HAVE_CUDA
   // ReadyTable for cross-PCIe-switch reduce
   if (_is_cross_pcie_switch) {
     if (_cpu_reducer->isRoot()) {
@@ -230,6 +238,9 @@ void BytePSGlobal::Init() {
                                       cudaStreamNonBlocking));
   CUDA_CALL(cudaStreamSynchronize(*_copy_host2device_stream));
   CUDA_CALL(cudaStreamSynchronize(*_copy_device2host_stream));
+  #endif
+
+  
 
   // Create queues
   for (int i = 0; i < QueueNum; i++) {
@@ -243,7 +254,8 @@ void BytePSGlobal::Init() {
   _initialized = true;
   BPS_LOG(DEBUG) << "Inited rank=" << _rank << " local_rank=" << _local_rank
                  << " size=" << _size << " local_size=" << _local_size
-                 << " worker_id=" << _worker_id;
+                 << " worker_id=" << _worker_id
+                 << " is_validator=" << _is_validator;
 
   if (getenv("BYTEPS_DEBUG_SAMPLE_TENSOR")) {
     _sample_key = strtoull(getenv("BYTEPS_DEBUG_SAMPLE_TENSOR"), nullptr, 0);
@@ -329,6 +341,7 @@ void BytePSGlobal::Shutdown() {
     _ps = NULL;
   }
 
+  #if HAVE_CUDA
   if (_copy_device2host_stream) {
     CUDA_CALL(cudaStreamDestroy(*_copy_device2host_stream));
     _copy_device2host_stream = NULL;
@@ -337,6 +350,7 @@ void BytePSGlobal::Shutdown() {
     CUDA_CALL(cudaStreamDestroy(*_copy_host2device_stream));
     _copy_host2device_stream = NULL;
   }
+  #endif
 
   if (_reduce_table) {
     delete _reduce_table;
@@ -362,8 +376,10 @@ void BytePSGlobal::Shutdown() {
 
   _basic_comm.reset();
   _shm_obj.reset();
+  #if HAVE_CUDA
   _cpu_reducer.reset();
   _nccl_manager.reset();
+  #endif
 
   // reset state, ignore profiling state
   BPS_LOG(DEBUG) << "Clear BytePS state";
@@ -629,6 +645,7 @@ uint32_t BytePSGlobal::GetTensorCount() {
   return BytePSGlobal::_name_to_cxt.size();
 }
 
+#if HAVE_CUDA
 cudaStream_t* BytePSGlobal::GetCopyDevice2HostStream() {
   return BytePSGlobal::_copy_device2host_stream;
 }
@@ -636,6 +653,7 @@ cudaStream_t* BytePSGlobal::GetCopyDevice2HostStream() {
 cudaStream_t* BytePSGlobal::GetCopyHost2DeviceStream() {
   return BytePSGlobal::_copy_host2device_stream;
 }
+#endif
 
 bool BytePSGlobal::IsAllThreadFinish(int total_thread_num) {
   int k = BytePSGlobal::joined_thread_cnt.fetch_add(0);
